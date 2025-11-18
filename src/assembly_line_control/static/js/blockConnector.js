@@ -134,8 +134,18 @@ const BlockConnector = {
             toY = fromPos.top;
         }
         
-        // Calculate right-angle path segments for preview
-        const segments = this.calculateRightAnglePath(fromX, fromY, toX, toY, WorkflowManager.gridSize);
+        // Calculate smart path segments for preview (use block IDs if available)
+        let segments;
+        const fromBlockId = fromEl ? parseInt(fromEl.dataset.blockId) : null;
+        const toBlockId = toEl ? parseInt(toEl.dataset.blockId) : null;
+        
+        if (fromBlockId && toBlockId) {
+            // Use smart pathfinding for preview
+            segments = this.calculateSmartPath(fromX, fromY, toX, toY, WorkflowManager.gridSize, fromBlockId, toBlockId);
+        } else {
+            // Fallback to simple path for preview
+            segments = this.calculateRightAnglePathFallback(fromX, fromY, toX, toY, WorkflowManager.gridSize);
+        }
         
         // Create container for preview connection segments
         const previewContainer = document.createElement('div');
@@ -878,8 +888,961 @@ const BlockConnector = {
     },
     
     /**
+     * Get all block obstacles (excluding source and destination blocks)
+     * @param {number} fromBlockId - Source block ID
+     * @param {number} toBlockId - Destination block ID
+     * @returns {Array} - Array of obstacle rectangles: [{left, top, right, bottom, width, height}, ...]
+     */
+    getAllBlockObstacles(fromBlockId, toBlockId) {
+        const obstacles = [];
+        
+        WorkflowManager.blocks.forEach((block, blockId) => {
+            // Exclude source and destination blocks
+            if (blockId === fromBlockId || blockId === toBlockId) return;
+            
+            const blockEl = this.getBlockElement(blockId);
+            if (!blockEl) return;
+            
+            const pos = this.getBlockPosition(blockEl, blockId);
+            if (!pos) return;
+            
+            obstacles.push({
+                left: pos.left,
+                top: pos.top,
+                right: pos.right,
+                bottom: pos.bottom,
+                width: pos.width,
+                height: pos.height
+            });
+        });
+        
+        return obstacles;
+    },
+    
+    /**
+     * Convert a coordinate to grid cell index
+     * @param {number} coord - Coordinate value
+     * @param {number} gridSize - Grid size in pixels
+     * @returns {number} - Grid cell index
+     */
+    coordToGridCell(coord, gridSize) {
+        return Math.floor(coord / gridSize);
+    },
+    
+    /**
+     * Get all grid cells occupied by a block rectangle
+     * @param {Object} blockRect - Block rectangle {left, top, right, bottom}
+     * @param {number} gridSize - Grid size in pixels
+     * @returns {Set} - Set of grid cell keys (e.g., "x,y")
+     */
+    getBlockOccupiedGridCells(blockRect, gridSize) {
+        const cells = new Set();
+        
+        // Get grid cell bounds for the block
+        const startCellX = this.coordToGridCell(blockRect.left, gridSize);
+        const endCellX = this.coordToGridCell(blockRect.right, gridSize);
+        const startCellY = this.coordToGridCell(blockRect.top, gridSize);
+        const endCellY = this.coordToGridCell(blockRect.bottom, gridSize);
+        
+        // Mark all cells within the block as occupied
+        for (let x = startCellX; x <= endCellX; x++) {
+            for (let y = startCellY; y <= endCellY; y++) {
+                cells.add(`${x},${y}`);
+            }
+        }
+        
+        return cells;
+    },
+    
+    /**
+     * Get all grid cells occupied by all obstacles
+     * @param {number} fromBlockId - Source block ID
+     * @param {number} toBlockId - Destination block ID
+     * @param {number} gridSize - Grid size in pixels
+     * @returns {Set} - Set of grid cell keys
+     */
+    getAllObstacleGridCells(fromBlockId, toBlockId, gridSize) {
+        const obstacles = this.getAllBlockObstacles(fromBlockId, toBlockId);
+        const occupiedCells = new Set();
+        
+        obstacles.forEach(blockRect => {
+            const cells = this.getBlockOccupiedGridCells(blockRect, gridSize);
+            cells.forEach(cell => occupiedCells.add(cell));
+        });
+        
+        return occupiedCells;
+    },
+    
+    /**
+     * Check if a point is inside a block rectangle
+     * @param {number} x - X coordinate
+     * @param {number} y - Y coordinate
+     * @param {Object} blockRect - Block rectangle {left, top, right, bottom}
+     * @returns {boolean} - True if point is in block
+     */
+    isPointInBlock(x, y, blockRect) {
+        return x >= blockRect.left && x <= blockRect.right &&
+               y >= blockRect.top && y <= blockRect.bottom;
+    },
+    
+    /**
+     * Check if a path segment intersects a block rectangle
+     * @param {Object} segment - Path segment {x, y, width, height}
+     * @param {Object} blockRect - Block rectangle {left, top, right, bottom}
+     * @returns {boolean} - True if segment intersects block
+     */
+    doesSegmentIntersectBlock(segment, blockRect) {
+        // Check if segment rectangle overlaps with block rectangle
+        const segmentLeft = segment.x;
+        const segmentRight = segment.x + segment.width;
+        const segmentTop = segment.y;
+        const segmentBottom = segment.y + segment.height;
+        
+        return !(segmentRight < blockRect.left || 
+                 segmentLeft > blockRect.right ||
+                 segmentBottom < blockRect.top ||
+                 segmentTop > blockRect.bottom);
+    },
+    
+    /**
+     * Check if a path segment passes through any obstacle grid cells
+     * @param {Object} segment - Path segment {x, y, width, height}
+     * @param {Set} occupiedCells - Set of occupied grid cell keys
+     * @param {number} gridSize - Grid size in pixels
+     * @returns {boolean} - True if segment passes through obstacles
+     */
+    doesSegmentPassThroughObstacles(segment, occupiedCells, gridSize) {
+        // Get all grid cells the segment passes through
+        const segmentCells = new Set();
+        
+        if (segment.width === 2) {
+            // Vertical segment
+            const cellX = this.coordToGridCell(segment.x, gridSize);
+            const startCellY = this.coordToGridCell(segment.y, gridSize);
+            const endCellY = this.coordToGridCell(segment.y + segment.height, gridSize);
+            
+            for (let y = startCellY; y <= endCellY; y++) {
+                segmentCells.add(`${cellX},${y}`);
+            }
+        } else if (segment.height === 2) {
+            // Horizontal segment
+            const cellY = this.coordToGridCell(segment.y, gridSize);
+            const startCellX = this.coordToGridCell(segment.x, gridSize);
+            const endCellX = this.coordToGridCell(segment.x + segment.width, gridSize);
+            
+            for (let x = startCellX; x <= endCellX; x++) {
+                segmentCells.add(`${x},${cellY}`);
+            }
+        }
+        
+        // Check if any segment cell is occupied
+        for (const cell of segmentCells) {
+            if (occupiedCells.has(cell)) {
+                return true;
+            }
+        }
+        
+        return false;
+    },
+    
+    /**
+     * Calculate Manhattan distance between two points
+     * @param {number} x1 - First point X
+     * @param {number} y1 - First point Y
+     * @param {number} x2 - Second point X
+     * @param {number} y2 - Second point Y
+     * @returns {number} - Manhattan distance
+     */
+    manhattanDistance(x1, y1, x2, y2) {
+        return Math.abs(x2 - x1) + Math.abs(y2 - y1);
+    },
+    
+    /**
+     * A* pathfinding algorithm with Manhattan distance heuristic
+     * Finds a right-angle path avoiding obstacles
+     * @param {number} fromX - Start X coordinate
+     * @param {number} fromY - Start Y coordinate
+     * @param {number} toX - End X coordinate
+     * @param {number} toY - End Y coordinate
+     * @param {number} gridSize - Grid size in pixels
+     * @param {number} fromBlockId - Source block ID
+     * @param {number} toBlockId - Destination block ID
+     * @returns {Array|null} - Array of path segments or null if no path found
+     */
+    calculateSmartPath(fromX, fromY, toX, toY, gridSize, fromBlockId, toBlockId) {
+        // Calculate distance between connectors
+        const dx = Math.abs(toX - fromX);
+        const dy = toY - fromY; // Positive if destination is below source
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // For blocks very close together (less than 3 grid cells), use simple L-shaped path
+        // Exit segments mess up connections at close distances
+        const closeDistanceThreshold = gridSize * 3; // 60px
+        if (distance < closeDistanceThreshold) {
+            return this.calculateRightAnglePathFallback(fromX, fromY, toX, toY, gridSize);
+        }
+        
+        // Get block rectangles for edge case handling
+        const fromRect = this.getBlockRect(fromBlockId);
+        const toRect = this.getBlockRect(toBlockId);
+        
+        // Edge case: If destination top connector is above source bottom connector (toY < fromY)
+        // and the destination block overlaps with the source block, we need special handling
+        // to prevent pathfinding from trying to route up through the source block
+        if (toY < fromY && fromRect && toRect) {
+            // Check if blocks overlap horizontally
+            const horizontalOverlap = !(toRect.right < fromRect.left || toRect.left > fromRect.right);
+            
+            if (horizontalOverlap) {
+                // Destination is above source and they overlap - use simple L-shaped path
+                // that goes around the blocks instead of through them
+                return this.calculateRightAnglePathFallback(fromX, fromY, toX, toY, gridSize);
+            }
+        }
+        
+        // Get all obstacle grid cells (excluding source and destination blocks)
+        // Note: We exclude source/destination from obstacles so paths can start/end at connectors,
+        // but we validate segments later to ensure they don't pass through block interiors
+        const occupiedCells = this.getAllObstacleGridCells(fromBlockId, toBlockId, gridSize);
+        
+        // Add source and destination blocks as obstacles (but exclude connector cells)
+        // This prevents pathfinding from routing through the blocks
+        if (fromRect) {
+            const fromCells = this.getBlockOccupiedGridCells(fromRect, gridSize);
+            // Exclude the connector cell (bottom center of source block)
+            const fromConnectorCellX = this.coordToGridCell(fromX, gridSize);
+            const fromConnectorCellY = this.coordToGridCell(fromY, gridSize);
+            fromCells.forEach(cell => {
+                // Don't mark the connector cell as occupied
+                if (cell !== `${fromConnectorCellX},${fromConnectorCellY}`) {
+                    occupiedCells.add(cell);
+                }
+            });
+        }
+        
+        if (toRect) {
+            const toCells = this.getBlockOccupiedGridCells(toRect, gridSize);
+            // Exclude the connector cell (top center of destination block)
+            const toConnectorCellX = this.coordToGridCell(toX, gridSize);
+            const toConnectorCellY = this.coordToGridCell(toY, gridSize);
+            toCells.forEach(cell => {
+                // Don't mark the connector cell as occupied
+                if (cell !== `${toConnectorCellX},${toConnectorCellY}`) {
+                    occupiedCells.add(cell);
+                }
+            });
+        }
+        
+        // Create automatic waypoints to make lines "come out" of blocks
+        // Source connector is at bottom, so add waypoint below it
+        // Destination connector is at top, so add waypoint above it
+        const exitOffset = gridSize; // One grid cell offset to clearly exit the block
+        const sourceExitY = fromY + exitOffset; // Below source (bottom connector)
+        const destExitY = toY - exitOffset; // Above destination (top connector)
+        
+        // Snap exit waypoints to grid centers for cleaner paths
+        const sourceExitYSnapped = WorkflowManager.snapToGridCenter(sourceExitY);
+        const destExitYSnapped = WorkflowManager.snapToGridCenter(destExitY);
+        
+        // Check for direct vertical alignment with no obstacles
+        if (Math.abs(toX - fromX) < gridSize / 2) {
+            // Use exit waypoints for direct path
+            const startY = Math.min(sourceExitYSnapped, destExitYSnapped);
+            const endY = Math.max(sourceExitYSnapped, destExitYSnapped);
+            const cellX = this.coordToGridCell(fromX, gridSize);
+            let hasObstacle = false;
+            
+            // Check if direct path has obstacles (checking between exit waypoints)
+            const startCellY = this.coordToGridCell(startY, gridSize);
+            const endCellY = this.coordToGridCell(endY, gridSize);
+            for (let y = startCellY; y <= endCellY; y++) {
+                if (occupiedCells.has(`${cellX},${y}`)) {
+                    hasObstacle = true;
+                    break;
+                }
+            }
+            
+            if (!hasObstacle) {
+                // Direct path is clear - create segments with exit waypoints
+                const segments = [];
+                
+                // Segment from source connector to exit waypoint (down)
+                // ALWAYS add this segment
+                const sourceExitHeight = sourceExitYSnapped - fromY;
+                if (sourceExitHeight > 0) {
+                    segments.push({
+                        x: fromX - 1,
+                        y: fromY,
+                        width: 2,
+                        height: Math.max(sourceExitHeight, 2) // Minimum 2px height
+                    });
+                }
+                
+                // Main vertical segment between exit waypoints
+                segments.push({
+                    x: fromX - 1,
+                    y: startY,
+                    width: 2,
+                    height: endY - startY
+                });
+                
+                // Segment from exit waypoint to destination connector (up)
+                // ALWAYS add this segment
+                const destExitHeight = toY - destExitYSnapped;
+                if (destExitHeight > 0) {
+                    segments.push({
+                        x: toX - 1,
+                        y: destExitYSnapped,
+                        width: 2,
+                        height: Math.max(destExitHeight, 2) // Minimum 2px height
+                    });
+                }
+                
+                return segments;
+            }
+        }
+        
+        // Convert exit waypoints to grid coordinates for A* pathfinding
+        const startGridX = this.coordToGridCell(fromX, gridSize);
+        const startGridY = this.coordToGridCell(sourceExitYSnapped, gridSize);
+        const endGridX = this.coordToGridCell(toX, gridSize);
+        const endGridY = this.coordToGridCell(destExitYSnapped, gridSize);
+        
+        // A* algorithm
+        const openSet = [];
+        const closedSet = new Set();
+        const cameFrom = new Map();
+        const gScore = new Map();
+        const fScore = new Map();
+        
+        const startKey = `${startGridX},${startGridY}`;
+        const endKey = `${endGridX},${endGridY}`;
+        
+        // Initialize start node
+        gScore.set(startKey, 0);
+        fScore.set(startKey, this.manhattanDistance(startGridX, startGridY, endGridX, endGridY));
+        openSet.push({
+            key: startKey,
+            x: startGridX,
+            y: startGridY,
+            f: fScore.get(startKey)
+        });
+        
+        // Sort open set by f-score (priority queue)
+        const sortOpenSet = () => {
+            openSet.sort((a, b) => a.f - b.f);
+        };
+        
+        // Maximum iterations to prevent infinite loops
+        const maxIterations = 10000;
+        let iterations = 0;
+        
+        while (openSet.length > 0 && iterations < maxIterations) {
+            iterations++;
+            sortOpenSet();
+            
+            const current = openSet.shift();
+            const currentKey = current.key;
+            
+            if (currentKey === endKey) {
+                // Reconstruct path
+                const path = [];
+                let nodeKey = endKey;
+                
+                while (nodeKey !== startKey) {
+                    const [x, y] = nodeKey.split(',').map(Number);
+                    path.unshift({ x, y });
+                    nodeKey = cameFrom.get(nodeKey);
+                }
+                
+                // Add start node
+                path.unshift({ x: startGridX, y: startGridY });
+                
+                // Convert grid path to segments, including exit waypoints
+                return this.gridPathToSegments(path, fromX, fromY, toX, toY, gridSize, fromBlockId, toBlockId, sourceExitYSnapped, destExitYSnapped);
+            }
+            
+            closedSet.add(currentKey);
+            
+            // Check neighbors (only horizontal/vertical)
+            const neighbors = [
+                { x: current.x + 1, y: current.y }, // Right
+                { x: current.x - 1, y: current.y }, // Left
+                { x: current.x, y: current.y + 1 }, // Down
+                { x: current.x, y: current.y - 1 }  // Up
+            ];
+            
+            for (const neighbor of neighbors) {
+                const neighborKey = `${neighbor.x},${neighbor.y}`;
+                
+                // Skip if in closed set
+                if (closedSet.has(neighborKey)) continue;
+                
+                // Skip if occupied by obstacle
+                if (occupiedCells.has(neighborKey)) continue;
+                
+                // Check if the edge between current and neighbor passes through obstacles
+                // This prevents paths that go through blocks and immediately backtrack
+                if (this.doesEdgePassThroughObstacles(current.x, current.y, neighbor.x, neighbor.y, occupiedCells)) {
+                    continue;
+                }
+                
+                // Calculate tentative g-score
+                const tentativeG = gScore.get(currentKey) + 1;
+                
+                // Check if we've seen this neighbor before
+                if (!gScore.has(neighborKey) || tentativeG < gScore.get(neighborKey)) {
+                    cameFrom.set(neighborKey, currentKey);
+                    gScore.set(neighborKey, tentativeG);
+                    const h = this.manhattanDistance(neighbor.x, neighbor.y, endGridX, endGridY);
+                    const f = tentativeG + h;
+                    fScore.set(neighborKey, f);
+                    
+                    // Add to open set if not already there
+                    const existingIndex = openSet.findIndex(n => n.key === neighborKey);
+                    if (existingIndex >= 0) {
+                        openSet[existingIndex].f = f;
+                    } else {
+                        openSet.push({
+                            key: neighborKey,
+                            x: neighbor.x,
+                            y: neighbor.y,
+                            f: f
+                        });
+                    }
+                }
+            }
+        }
+        
+        // A* failed - try BFS as fallback (no heuristic, guaranteed to find path if one exists)
+        console.warn(`[PATHFINDER] A* failed, trying BFS fallback from (${fromX}, ${fromY}) to (${toX}, ${toY})`);
+        const bfsPath = this.bfsPathfinding(startGridX, startGridY, endGridX, endGridY, occupiedCells);
+        
+        if (bfsPath && bfsPath.length > 0) {
+            // Convert grid path to segments, including exit waypoints
+            return this.gridPathToSegments(bfsPath, fromX, fromY, toX, toY, gridSize, fromBlockId, toBlockId, sourceExitYSnapped, destExitYSnapped);
+        }
+        
+        // BFS also failed - fallback to simple L-shaped path
+        console.warn(`[PATHFINDER] BFS also failed, using simple fallback`);
+        return this.calculateRightAnglePathFallback(fromX, fromY, toX, toY, gridSize);
+    },
+    
+    /**
+     * Check if an edge between two grid cells passes through obstacles
+     * @param {number} x1 - First cell X
+     * @param {number} y1 - First cell Y
+     * @param {number} x2 - Second cell X
+     * @param {number} y2 - Second cell Y
+     * @param {Set} occupiedCells - Set of occupied grid cell keys
+     * @returns {boolean} - True if edge passes through obstacles
+     */
+    doesEdgePassThroughObstacles(x1, y1, x2, y2, occupiedCells) {
+        // For horizontal/vertical edges, check all cells the edge passes through
+        if (x1 === x2) {
+            // Vertical edge
+            const startY = Math.min(y1, y2);
+            const endY = Math.max(y1, y2);
+            for (let y = startY; y <= endY; y++) {
+                if (occupiedCells.has(`${x1},${y}`)) {
+                    return true;
+                }
+            }
+        } else if (y1 === y2) {
+            // Horizontal edge
+            const startX = Math.min(x1, x2);
+            const endX = Math.max(x1, x2);
+            for (let x = startX; x <= endX; x++) {
+                if (occupiedCells.has(`${x},${y1}`)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
+    
+    /**
+     * BFS pathfinding algorithm (fallback when A* fails)
+     * Guaranteed to find shortest path if one exists, no heuristic
+     * @param {number} startX - Start grid X
+     * @param {number} startY - Start grid Y
+     * @param {number} endX - End grid X
+     * @param {number} endY - End grid Y
+     * @param {Set} occupiedCells - Set of occupied grid cell keys
+     * @returns {Array|null} - Array of {x, y} grid coordinates or null if no path
+     */
+    bfsPathfinding(startX, startY, endX, endY, occupiedCells) {
+        const queue = [{ x: startX, y: startY, path: [{ x: startX, y: startY }] }];
+        const visited = new Set();
+        const startKey = `${startX},${startY}`;
+        const endKey = `${endX},${endY}`;
+        visited.add(startKey);
+        
+        const maxIterations = 10000;
+        let iterations = 0;
+        
+        while (queue.length > 0 && iterations < maxIterations) {
+            iterations++;
+            const current = queue.shift();
+            const currentKey = `${current.x},${current.y}`;
+            
+            if (currentKey === endKey) {
+                return current.path;
+            }
+            
+            // Check neighbors (only horizontal/vertical)
+            const neighbors = [
+                { x: current.x + 1, y: current.y },
+                { x: current.x - 1, y: current.y },
+                { x: current.x, y: current.y + 1 },
+                { x: current.x, y: current.y - 1 }
+            ];
+            
+            for (const neighbor of neighbors) {
+                const neighborKey = `${neighbor.x},${neighbor.y}`;
+                
+                // Skip if visited
+                if (visited.has(neighborKey)) continue;
+                
+                // Skip if occupied by obstacle
+                if (occupiedCells.has(neighborKey)) continue;
+                
+                // Check if edge passes through obstacles
+                if (this.doesEdgePassThroughObstacles(current.x, current.y, neighbor.x, neighbor.y, occupiedCells)) {
+                    continue;
+                }
+                
+                visited.add(neighborKey);
+                queue.push({
+                    x: neighbor.x,
+                    y: neighbor.y,
+                    path: [...current.path, { x: neighbor.x, y: neighbor.y }]
+                });
+            }
+        }
+        
+        return null;
+    },
+    
+    /**
+     * Get block rectangle for validation
+     * @param {number} blockId - Block ID
+     * @returns {Object|null} - Block rectangle or null
+     */
+    getBlockRect(blockId) {
+        const blockEl = this.getBlockElement(blockId);
+        if (!blockEl) return null;
+        const pos = this.getBlockPosition(blockEl, blockId);
+        if (!pos) return null;
+        return {
+            left: pos.left,
+            top: pos.top,
+            right: pos.right,
+            bottom: pos.bottom
+        };
+    },
+    
+    /**
+     * Check if a segment passes through source or destination blocks
+     * @param {Object} segment - Path segment
+     * @param {number} fromBlockId - Source block ID
+     * @param {number} toBlockId - Destination block ID
+     * @returns {boolean} - True if segment passes through source/destination blocks
+     */
+    doesSegmentPassThroughSourceOrDest(segment, fromBlockId, toBlockId) {
+        const fromRect = this.getBlockRect(fromBlockId);
+        const toRect = this.getBlockRect(toBlockId);
+        
+        if (fromRect && this.doesSegmentIntersectBlock(segment, fromRect)) {
+            return true;
+        }
+        if (toRect && this.doesSegmentIntersectBlock(segment, toRect)) {
+            return true;
+        }
+        return false;
+    },
+    
+    /**
+     * Convert grid path to segment format
+     * @param {Array} gridPath - Array of {x, y} grid coordinates
+     * @param {number} fromX - Actual start X (connector position)
+     * @param {number} fromY - Actual start Y (connector position)
+     * @param {number} toX - Actual end X (connector position)
+     * @param {number} toY - Actual end Y (connector position)
+     * @param {number} gridSize - Grid size in pixels
+     * @param {number} fromBlockId - Source block ID (for validation)
+     * @param {number} toBlockId - Destination block ID (for validation)
+     * @param {number} sourceExitY - Exit waypoint Y below source connector
+     * @param {number} destExitY - Exit waypoint Y above destination connector
+     * @returns {Array} - Array of segments
+     */
+    gridPathToSegments(gridPath, fromX, fromY, toX, toY, gridSize, fromBlockId, toBlockId, sourceExitY, destExitY) {
+        if (gridPath.length < 2) {
+            return [];
+        }
+        
+        const segments = [];
+        
+        // Convert grid coordinates to pixel coordinates (grid cell centers)
+        const gridToPixel = (gridCoord) => {
+            return gridCoord * gridSize + gridSize / 2;
+        };
+        
+        // First segment: from source connector (bottom) down to exit waypoint
+        // ALWAYS add this segment - it goes from connector (at block edge) to exit waypoint (outside block)
+        // so it should never pass through the block interior
+        // Ensure minimum height to make it visible
+        const sourceExitHeight = sourceExitY - fromY;
+        if (sourceExitHeight > 0) {
+            segments.push({
+                x: fromX - 1,
+                y: fromY,
+                width: 2,
+                height: Math.max(sourceExitHeight, 2) // Minimum 2px height
+            });
+        }
+        
+        // Start pathfinding from exit waypoint
+        let currentX = fromX;
+        let currentY = sourceExitY;
+        
+        for (let i = 1; i < gridPath.length; i++) {
+            const prev = gridPath[i - 1];
+            const curr = gridPath[i];
+            
+            const nextX = gridToPixel(curr.x);
+            const nextY = gridToPixel(curr.y);
+            
+            // Determine direction and create segment
+            if (curr.x !== prev.x) {
+                // Horizontal movement
+                const minX = Math.min(currentX, nextX);
+                const maxX = Math.max(currentX, nextX);
+                const segment = {
+                    x: minX,
+                    y: currentY - 1,
+                    width: maxX - minX,
+                    height: 2
+                };
+                // Only add segment if it doesn't pass through source/destination blocks
+                if (!this.doesSegmentPassThroughSourceOrDest(segment, fromBlockId, toBlockId)) {
+                    segments.push(segment);
+                }
+                currentX = nextX;
+            } else if (curr.y !== prev.y) {
+                // Vertical movement
+                const minY = Math.min(currentY, nextY);
+                const maxY = Math.max(currentY, nextY);
+                const segment = {
+                    x: currentX - 1,
+                    y: minY,
+                    width: 2,
+                    height: maxY - minY
+                };
+                // Only add segment if it doesn't pass through source/destination blocks
+                if (!this.doesSegmentPassThroughSourceOrDest(segment, fromBlockId, toBlockId)) {
+                    segments.push(segment);
+                }
+                currentY = nextY;
+            }
+        }
+        
+        // Final segments: from pathfinding end to exit waypoint, then to destination connector
+        // First, connect to destination exit waypoint
+        if (Math.abs(currentX - toX) > 1) {
+            const minX = Math.min(currentX, toX);
+            const maxX = Math.max(currentX, toX);
+            const segment = {
+                x: minX,
+                y: currentY - 1,
+                width: maxX - minX,
+                height: 2
+            };
+            // Only add segment if it doesn't pass through source/destination blocks
+            if (!this.doesSegmentPassThroughSourceOrDest(segment, fromBlockId, toBlockId)) {
+                segments.push(segment);
+            }
+            currentX = toX;
+        }
+        
+        if (Math.abs(currentY - destExitY) > 1) {
+            const minY = Math.min(currentY, destExitY);
+            const maxY = Math.max(currentY, destExitY);
+            const segment = {
+                x: currentX - 1,
+                y: minY,
+                width: 2,
+                height: maxY - minY
+            };
+            // Only add segment if it doesn't pass through source/destination blocks
+            if (!this.doesSegmentPassThroughSourceOrDest(segment, fromBlockId, toBlockId)) {
+                segments.push(segment);
+            }
+            currentY = destExitY;
+        }
+        
+        // Final segment: from exit waypoint (above destination) up to destination connector (top)
+        // ALWAYS add this segment - it goes from exit waypoint (outside block) to connector (at block edge)
+        // so it should never pass through the block interior
+        // Ensure minimum height to make it visible
+        const destExitHeight = toY - destExitY;
+        if (destExitHeight > 0) {
+            segments.push({
+                x: toX - 1,
+                y: destExitY,
+                width: 2,
+                height: Math.max(destExitHeight, 2) // Minimum 2px height
+            });
+        }
+        
+        return segments;
+    },
+    
+    /**
+     * Fallback to simple L-shaped path when A* fails or blocks are close
+     * @param {number} fromX - Start X
+     * @param {number} fromY - Start Y
+     * @param {number} toX - End X
+     * @param {number} toY - End Y
+     * @param {number} gridSize - Grid size
+     * @param {boolean} useExitSegments - Whether to use exit segments (default: false for close blocks)
+     * @returns {Array} - Array of segments
+     */
+    calculateRightAnglePathFallback(fromX, fromY, toX, toY, gridSize = 20, useExitSegments = false) {
+        const segments = [];
+        
+        const dx = toX - fromX;
+        const dy = toY - fromY;
+        
+        // Calculate distance to determine if we should use exit segments
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const closeDistanceThreshold = gridSize * 3;
+        const shouldUseExitSegments = useExitSegments && distance >= closeDistanceThreshold;
+        
+        let sourceExitY, destExitY;
+        if (shouldUseExitSegments) {
+            // Create automatic exit waypoints
+            const exitOffset = gridSize;
+            sourceExitY = WorkflowManager.snapToGridCenter(fromY + exitOffset);
+            destExitY = WorkflowManager.snapToGridCenter(toY - exitOffset);
+        } else {
+            // For close blocks, use connector positions directly
+            sourceExitY = fromY;
+            destExitY = toY;
+        }
+        
+        // If blocks are vertically aligned (same X), go straight
+        if (Math.abs(dx) < gridSize / 2) {
+            if (shouldUseExitSegments) {
+                // Segment from source connector to exit waypoint (down)
+                const sourceExitHeight = sourceExitY - fromY;
+                if (sourceExitHeight > 0) {
+                    segments.push({
+                        x: fromX - 1,
+                        y: fromY,
+                        width: 2,
+                        height: Math.max(sourceExitHeight, 2)
+                    });
+                }
+                
+                // Main vertical segment between exit waypoints
+                const startY = Math.min(sourceExitY, destExitY);
+                const endY = Math.max(sourceExitY, destExitY);
+                segments.push({
+                    x: fromX - 1,
+                    y: startY,
+                    width: 2,
+                    height: endY - startY
+                });
+                
+                // Segment from exit waypoint to destination connector (up)
+                const destExitHeight = toY - destExitY;
+                if (destExitHeight > 0) {
+                    segments.push({
+                        x: toX - 1,
+                        y: destExitY,
+                        width: 2,
+                        height: Math.max(destExitHeight, 2)
+                    });
+                }
+            } else {
+                // Simple straight line for close blocks
+                const startY = Math.min(fromY, toY);
+                const endY = Math.max(fromY, toY);
+                segments.push({
+                    x: fromX - 1,
+                    y: startY,
+                    width: 2,
+                    height: endY - startY
+                });
+            }
+            
+            return segments;
+        }
+        
+        // Calculate a good intermediate Y position for the horizontal turn
+        const midY = shouldUseExitSegments 
+            ? WorkflowManager.snapToGridCenter((sourceExitY + destExitY) / 2)
+            : WorkflowManager.snapToGridCenter((fromY + toY) / 2);
+        const minVerticalSpace = gridSize * 2;
+        let turnY = midY;
+        
+        const exitDy = destExitY - sourceExitY;
+        if (Math.abs(exitDy) < minVerticalSpace) {
+            if (exitDy > 0) {
+                turnY = WorkflowManager.snapToGridCenter(sourceExitY + minVerticalSpace / 2);
+            } else {
+                turnY = WorkflowManager.snapToGridCenter(sourceExitY - minVerticalSpace / 2);
+            }
+        }
+        
+        // Create L-shaped path
+        if (shouldUseExitSegments) {
+            // First segment: from source connector to exit waypoint (down)
+            const sourceExitHeight = sourceExitY - fromY;
+            if (sourceExitHeight > 0) {
+                segments.push({
+                    x: fromX - 1,
+                    y: fromY,
+                    width: 2,
+                    height: Math.max(sourceExitHeight, 2) // Minimum 2px height
+                });
+            }
+        }
+        
+        // Pathfinding segments from source exit to destination exit
+        if (exitDy >= 0) {
+            // Going down from source exit
+            const firstSegmentHeight = turnY - sourceExitY;
+            if (firstSegmentHeight > 0) {
+                segments.push({
+                    x: fromX - 1,
+                    y: sourceExitY,
+                    width: 2,
+                    height: firstSegmentHeight
+                });
+            }
+            
+            const horizontalStartX = Math.min(fromX, toX);
+            const horizontalEndX = Math.max(fromX, toX);
+            const horizontalWidth = horizontalEndX - horizontalStartX;
+            segments.push({
+                x: horizontalStartX,
+                y: turnY - 1,
+                width: horizontalWidth,
+                height: 2
+            });
+            
+            const finalSegmentHeight = destExitY - turnY;
+            if (finalSegmentHeight > 0) {
+                segments.push({
+                    x: toX - 1,
+                    y: turnY,
+                    width: 2,
+                    height: finalSegmentHeight
+                });
+            } else if (finalSegmentHeight < 0) {
+                segments.push({
+                    x: toX - 1,
+                    y: destExitY,
+                    width: 2,
+                    height: Math.abs(finalSegmentHeight)
+                });
+            }
+        } else {
+            // Going up from source exit (destination is above source)
+            // For close blocks without exit segments, we need to handle this differently
+            if (shouldUseExitSegments) {
+                const firstSegmentHeight = sourceExitY - turnY;
+                if (firstSegmentHeight > 0) {
+                    segments.push({
+                        x: fromX - 1,
+                        y: turnY,
+                        width: 2,
+                        height: firstSegmentHeight
+                    });
+                }
+            } else {
+                // For close blocks going up, go down first, then horizontal, then up
+                const firstSegmentHeight = turnY - fromY;
+                if (firstSegmentHeight > 0) {
+                    segments.push({
+                        x: fromX - 1,
+                        y: fromY,
+                        width: 2,
+                        height: firstSegmentHeight
+                    });
+                }
+            }
+            
+            const horizontalStartX = Math.min(fromX, toX);
+            const horizontalEndX = Math.max(fromX, toX);
+            const horizontalWidth = horizontalEndX - horizontalStartX;
+            segments.push({
+                x: horizontalStartX,
+                y: turnY - 1,
+                width: horizontalWidth,
+                height: 2
+            });
+            
+            if (shouldUseExitSegments) {
+                const finalSegmentHeight = turnY - destExitY;
+                if (finalSegmentHeight > 0) {
+                    segments.push({
+                        x: toX - 1,
+                        y: destExitY,
+                        width: 2,
+                        height: finalSegmentHeight
+                    });
+                } else if (finalSegmentHeight < 0) {
+                    segments.push({
+                        x: toX - 1,
+                        y: turnY,
+                        width: 2,
+                        height: Math.abs(finalSegmentHeight)
+                    });
+                }
+            } else {
+                // For close blocks, final segment goes to destination connector
+                const finalSegmentHeight = toY - turnY;
+                if (finalSegmentHeight > 0) {
+                    segments.push({
+                        x: toX - 1,
+                        y: turnY,
+                        width: 2,
+                        height: finalSegmentHeight
+                    });
+                } else if (finalSegmentHeight < 0) {
+                    segments.push({
+                        x: toX - 1,
+                        y: toY,
+                        width: 2,
+                        height: Math.abs(finalSegmentHeight)
+                    });
+                }
+            }
+        }
+        
+        // Final segment: from destination exit waypoint to destination connector (up)
+        if (shouldUseExitSegments) {
+            const destExitHeight = toY - destExitY;
+            if (destExitHeight > 0) {
+                segments.push({
+                    x: toX - 1,
+                    y: destExitY,
+                    width: 2,
+                    height: Math.max(destExitHeight, 2) // Minimum 2px height
+                });
+            }
+        }
+        
+        return segments;
+    },
+    
+    /**
      * Calculate a good-looking right-angle path between two points
      * Returns an array of segments: [{x, y, width, height}, ...]
+     * @deprecated Use calculateSmartPath instead
      */
     calculateRightAnglePath(fromX, fromY, toX, toY, gridSize = 20) {
         const segments = [];
@@ -1049,7 +2012,7 @@ const BlockConnector = {
         if (useCustomPath) {
             segments = this.calculateCustomPath(fromX, fromY, toX, toY, customPath.waypoints);
         } else {
-            segments = this.calculateRightAnglePath(fromX, fromY, toX, toY, WorkflowManager.gridSize);
+            segments = this.calculateSmartPath(fromX, fromY, toX, toY, WorkflowManager.gridSize, fromBlockId, toBlockId);
         }
         
         // Create container for connection segments (so we can handle hover/click on all segments)
@@ -1531,3 +2494,4 @@ const BlockConnector = {
         });
     }
 };
+
