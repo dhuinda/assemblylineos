@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assembly Line OS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+    <!-- ROS Bridge WebSocket Library -->
+    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="h-screen p-2 overflow-hidden flex flex-col">
+    <div class="w-full flex-1 flex flex-col min-w-0">
+        <!-- Header -->
+        <div class="card px-2 py-1 mb-1 flex-shrink-0">
+            <div class="flex items-center gap-3 flex-wrap">
+                <h1 class="text-xs font-bold text-white whitespace-nowrap">ASSEMBLY LINE OS</h1>
+                <div class="flex items-center gap-2 border-l border-gray-700 pl-2">
+                    <label class="text-xs text-gray-500 whitespace-nowrap">Workspace:</label>
+                    <select id="workspaceList" 
+                            class="px-1.5 py-0.5 text-xs bg-gray-800 text-white border border-gray-600 rounded focus:outline-none focus:border-blue-500 min-w-[120px]"
+                            onchange="loadWorkspaceFromSelect()">
+                        <option value="">Select workspace...</option>
+                    </select>
+                    <span class="text-xs text-gray-500">Current: <span id="currentWorkspaceName" class="text-gray-400 font-mono">None</span></span>
+                </div>
+                <div class="flex items-center gap-1 border-l border-gray-700 pl-2">
+                    <button onclick="newWorkspace()" 
+                            class="btn-secondary px-1.5 py-0.5 text-xs font-medium">
+                        NEW
+                    </button>
+                    <button onclick="saveCurrentWorkspace()" 
+                            class="btn-secondary px-1.5 py-0.5 text-xs font-medium">
+                        SAVE
+                    </button>
+                    <button onclick="saveWorkspaceAs()" 
+                            class="btn-success px-1.5 py-0.5 text-xs font-medium">
+                        SAVE AS
+                    </button>
+                    <button onclick="deleteCurrentWorkspace()" 
+                            class="btn-danger px-1.5 py-0.5 text-xs font-medium">
+                        DELETE
+                    </button>
+                </div>
+                <div class="flex items-center gap-2 border-l border-gray-700 pl-2">
+                    <button onclick="resetPanelLayout()" 
+                            class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
+                            title="Reset panel layout to default">
+                        RESET VIEW
+                    </button>
+                </div>
+                <div class="flex items-center gap-2 border-l border-gray-700 pl-2 ml-auto">
+                    <p id="rosStatus" class="text-xs status-disconnected font-medium whitespace-nowrap">● DISCONNECTED</p>
+                    <p class="text-xs text-gray-500 whitespace-nowrap">ws://localhost:9090</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex flex-1 min-h-0 w-full gap-2">
+            <!-- Left Sidebar with Tabs -->
+            <div id="leftSidebar" class="flex flex-col min-h-0" style="width: 25%; min-width: 200px; max-width: 50%;">
+                <div class="card flex flex-col flex-1 min-h-0">
+                    <!-- Sidebar Tabs -->
+                    <div class="flex border-b border-gray-700 flex-shrink-0">
+                        <button onclick="switchSidebarTab('palette')" 
+                                id="sidebarTab-palette"
+                                class="sidebar-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors active">
+                            BLOCKS
+                        </button>
+                        <button onclick="switchSidebarTab('speed')" 
+                                id="sidebarTab-speed"
+                                class="sidebar-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
+                            SPEED
+                        </button>
+                        <button onclick="switchSidebarTab('controls')" 
+                                id="sidebarTab-controls"
+                                class="sidebar-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
+                            CONTROLS
+                        </button>
+                    </div>
+                    
+                    <!-- Sidebar Content -->
+                    <div class="p-3 overflow-y-auto flex-1 min-h-0">
+                        <!-- Block Palette Panel -->
+                        <div id="sidebarPanel-palette" class="sidebar-panel">
+                            <div class="space-y-2" id="blockPalette">
+                                <!-- Event Blocks -->
+                                <div class="block block-event card p-2" data-type="event" data-event-type="green-flag" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-trigger font-medium text-xs">▶ WHEN START CLICKED</span>
+                                    </div>
+                                </div>
+                                <div class="block block-event card p-2" data-type="event" data-event-type="workflow-complete" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-trigger font-medium text-xs">⚡ WHEN WORKFLOW COMPLETE</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Motor Blocks -->
+                                <div class="block block-motor card p-2" data-type="motor" data-motor-id="1" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-motor font-medium text-xs">MOTOR 1</span>
+                                        <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
+                                               placeholder="steps" data-param="steps" value="0">
+                                    </div>
+                                </div>
+                                <div class="block block-motor card p-2" data-type="motor" data-motor-id="2" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-motor font-medium text-xs">MOTOR 2</span>
+                                        <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
+                                               placeholder="steps" data-param="steps" value="0">
+                                    </div>
+                                </div>
+                                
+                                <!-- Relay Blocks -->
+                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="1" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-relay font-medium text-xs">RELAY 1</span>
+                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                data-param="state">
+                                            <option value="on">ON</option>
+                                            <option value="off">OFF</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="2" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-relay font-medium text-xs">RELAY 2</span>
+                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                data-param="state">
+                                            <option value="on">ON</option>
+                                            <option value="off">OFF</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="3" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-relay font-medium text-xs">RELAY 3</span>
+                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                data-param="state">
+                                            <option value="on">ON</option>
+                                            <option value="off">OFF</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="4" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-relay font-medium text-xs">RELAY 4</span>
+                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                data-param="state">
+                                            <option value="on">ON</option>
+                                            <option value="off">OFF</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <!-- Pause Block -->
+                                <div class="block block-pause card p-2" data-type="pause" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-pause font-medium text-xs">PAUSE</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Delay Block -->
+                                <div class="block block-delay card p-2" data-type="delay" draggable="true">
+                                    <div class="flex items-center justify-between">
+                                        <span class="accent-delay font-medium text-xs">DELAY</span>
+                                        <input type="number" step="0.1" class="w-14 px-2 py-1 text-xs text-white accent-delay" 
+                                               placeholder="s" data-param="duration" value="1.0">
+                                    </div>
+                                </div>
+                                
+                                <!-- ROS Topic Trigger Block -->
+                                <div class="block block-trigger card p-2" data-type="ros-trigger" draggable="true">
+                                    <div class="flex flex-col gap-1">
+                                        <span class="accent-trigger font-medium text-xs">WAIT FOR ROS TOPIC</span>
+                                        <div class="flex flex-col gap-0.5">
+                                            <label class="text-xs text-gray-400">Topic:</label>
+                                            <select class="w-full px-2 py-1 text-xs text-white accent-trigger" 
+                                                    data-param="topic"
+                                                    onchange="handleRosTriggerTopicChange(this)">
+                                                <option value="/rosout">/rosout (Log messages)</option>
+                                                <option value="/motor1/status">/motor1/status</option>
+                                                <option value="/motor2/status">/motor2/status</option>
+                                                <option value="/topic">Custom topic...</option>
+                                            </select>
+                                            <input type="text" class="w-full px-2 py-1 text-xs text-white accent-trigger mt-0.5" 
+                                                   placeholder="/custom/topic" data-param="topic" value="/rosout"
+                                                   style="display: none;"
+                                                   onclick="event.stopPropagation()">
+                                        </div>
+                                        <div class="flex flex-col gap-0.5">
+                                            <label class="text-xs text-gray-400">Wait for text:</label>
+                                            <input type="text" class="w-full px-2 py-1 text-xs text-white accent-trigger" 
+                                                   placeholder="e.g., Motor 1 finished" data-param="expectedString" value="">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Motor Speed Panel -->
+                        <div id="sidebarPanel-speed" class="sidebar-panel hidden">
+                            <div class="space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-xs text-gray-400">MOTOR 1</span>
+                                    <div class="flex items-center gap-2">
+                                        <input type="range" id="motor1Speed" min="1" max="200" value="100" 
+                                               class="w-24 accent-motor" 
+                                               oninput="updateMotorSpeed(1, this.value)">
+                                        <span id="motor1SpeedValue" class="text-xs accent-motor w-12 text-right">100</span>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <span class="text-xs text-gray-400">MOTOR 2</span>
+                                    <div class="flex items-center gap-2">
+                                        <input type="range" id="motor2Speed" min="1" max="200" value="100" 
+                                               class="w-24 accent-motor" 
+                                               oninput="updateMotorSpeed(2, this.value)">
+                                        <span id="motor2SpeedValue" class="text-xs accent-motor w-12 text-right">100</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-3 text-xs text-gray-500">
+                                Speed: steps per second (default: 100)
+                            </div>
+                        </div>
+
+                        <!-- Manual Controls Panel -->
+                        <div id="sidebarPanel-controls" class="sidebar-panel hidden">
+                            <!-- Motor 1 Controls -->
+                            <div class="mb-4 pb-3 border-b border-gray-700">
+                                <div class="text-xs font-semibold accent-motor mb-2">MOTOR 1</div>
+                                <div class="space-y-2">
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Nudge:</span>
+                                        <button onclick="nudgeMotor(1, -100)" class="btn-secondary px-2 py-1 text-xs flex-1">-100</button>
+                                        <button onclick="nudgeMotor(1, -50)" class="btn-secondary px-2 py-1 text-xs flex-1">-50</button>
+                                        <button onclick="nudgeMotor(1, -10)" class="btn-secondary px-2 py-1 text-xs flex-1">-10</button>
+                                        <button onclick="nudgeMotor(1, 10)" class="btn-secondary px-2 py-1 text-xs flex-1">+10</button>
+                                        <button onclick="nudgeMotor(1, 50)" class="btn-secondary px-2 py-1 text-xs flex-1">+50</button>
+                                        <button onclick="nudgeMotor(1, 100)" class="btn-secondary px-2 py-1 text-xs flex-1">+100</button>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Steps:</span>
+                                        <input type="number" id="motor1StepsInput" value="100" min="-10000" max="10000" 
+                                               class="px-2 py-1 text-xs text-white accent-motor w-16" 
+                                               style="max-width: 64px;"
+                                               onkeypress="if(event.key==='Enter') moveMotorSteps(1)">
+                                        <button onclick="moveMotorSteps(1)" class="btn-secondary px-2 py-1 text-xs flex-1">MOVE</button>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Run:</span>
+                                        <button id="motor1RunBackward" onclick="runMotor(1, -1)" class="btn-secondary px-2 py-1 text-xs flex-1">◀◀ BACK</button>
+                                        <button id="motor1Stop" onclick="stopMotor(1)" class="btn-danger px-2 py-1 text-xs flex-1">STOP</button>
+                                        <button id="motor1RunForward" onclick="runMotor(1, 1)" class="btn-secondary px-2 py-1 text-xs flex-1">FORWARD ▶▶</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Motor 2 Controls -->
+                            <div class="mb-4 pb-3 border-b border-gray-700">
+                                <div class="text-xs font-semibold accent-motor mb-2">MOTOR 2</div>
+                                <div class="space-y-2">
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Nudge:</span>
+                                        <button onclick="nudgeMotor(2, -100)" class="btn-secondary px-2 py-1 text-xs flex-1">-100</button>
+                                        <button onclick="nudgeMotor(2, -50)" class="btn-secondary px-2 py-1 text-xs flex-1">-50</button>
+                                        <button onclick="nudgeMotor(2, -10)" class="btn-secondary px-2 py-1 text-xs flex-1">-10</button>
+                                        <button onclick="nudgeMotor(2, 10)" class="btn-secondary px-2 py-1 text-xs flex-1">+10</button>
+                                        <button onclick="nudgeMotor(2, 50)" class="btn-secondary px-2 py-1 text-xs flex-1">+50</button>
+                                        <button onclick="nudgeMotor(2, 100)" class="btn-secondary px-2 py-1 text-xs flex-1">+100</button>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Steps:</span>
+                                        <input type="number" id="motor2StepsInput" value="100" min="-10000" max="10000" 
+                                               class="px-2 py-1 text-xs text-white accent-motor w-16" 
+                                               style="max-width: 64px;"
+                                               onkeypress="if(event.key==='Enter') moveMotorSteps(2)">
+                                        <button onclick="moveMotorSteps(2)" class="btn-secondary px-2 py-1 text-xs flex-1">MOVE</button>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Run:</span>
+                                        <button id="motor2RunBackward" onclick="runMotor(2, -1)" class="btn-secondary px-2 py-1 text-xs flex-1">◀◀ BACK</button>
+                                        <button id="motor2Stop" onclick="stopMotor(2)" class="btn-danger px-2 py-1 text-xs flex-1">STOP</button>
+                                        <button id="motor2RunForward" onclick="runMotor(2, 1)" class="btn-secondary px-2 py-1 text-xs flex-1">FORWARD ▶▶</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Synchronized Motor Controls (Both Motors) -->
+                            <div class="mb-4 pb-3 border-b border-gray-700">
+                                <div class="text-xs font-semibold accent-motor mb-2">MOTORS 1 & 2 (SYNC)</div>
+                                <div class="space-y-2">
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Nudge:</span>
+                                        <button onclick="nudgeBothMotors(-100)" class="btn-secondary px-2 py-1 text-xs flex-1">-100</button>
+                                        <button onclick="nudgeBothMotors(-50)" class="btn-secondary px-2 py-1 text-xs flex-1">-50</button>
+                                        <button onclick="nudgeBothMotors(-10)" class="btn-secondary px-2 py-1 text-xs flex-1">-10</button>
+                                        <button onclick="nudgeBothMotors(10)" class="btn-secondary px-2 py-1 text-xs flex-1">+10</button>
+                                        <button onclick="nudgeBothMotors(50)" class="btn-secondary px-2 py-1 text-xs flex-1">+50</button>
+                                        <button onclick="nudgeBothMotors(100)" class="btn-secondary px-2 py-1 text-xs flex-1">+100</button>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Steps:</span>
+                                        <input type="number" id="bothMotorsStepsInput" value="100" min="-10000" max="10000" 
+                                               class="px-2 py-1 text-xs text-white accent-motor w-16" 
+                                               style="max-width: 64px;"
+                                               onkeypress="if(event.key==='Enter') moveBothMotorsSteps()">
+                                        <button onclick="moveBothMotorsSteps()" class="btn-secondary px-2 py-1 text-xs flex-1">MOVE</button>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs text-gray-500 w-12">Run:</span>
+                                        <button id="bothMotorsRunBackward" onclick="runBothMotors(-1)" class="btn-secondary px-2 py-1 text-xs flex-1">◀◀ BACK</button>
+                                        <button id="bothMotorsStop" onclick="stopBothMotors()" class="btn-danger px-2 py-1 text-xs flex-1">STOP</button>
+                                        <button id="bothMotorsRunForward" onclick="runBothMotors(1)" class="btn-secondary px-2 py-1 text-xs flex-1">FORWARD ▶▶</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Relay 1 Controls -->
+                            <div class="mb-4 pb-3 border-b border-gray-700">
+                                <div class="text-xs font-semibold accent-relay mb-2">RELAY 1</div>
+                                <div class="flex items-center gap-1">
+                                    <button id="relay1Off" onclick="setRelay(1, 'off')" class="btn-secondary px-3 py-1 text-xs flex-1">OFF</button>
+                                    <button id="relay1On" onclick="setRelay(1, 'on')" class="btn-success px-3 py-1 text-xs flex-1">ON</button>
+                                </div>
+                            </div>
+
+                            <!-- Relay 2 Controls -->
+                            <div class="mb-4 pb-3 border-b border-gray-700">
+                                <div class="text-xs font-semibold accent-relay mb-2">RELAY 2</div>
+                                <div class="flex items-center gap-1">
+                                    <button id="relay2Off" onclick="setRelay(2, 'off')" class="btn-secondary px-3 py-1 text-xs flex-1">OFF</button>
+                                    <button id="relay2On" onclick="setRelay(2, 'on')" class="btn-success px-3 py-1 text-xs flex-1">ON</button>
+                                </div>
+                            </div>
+
+                            <!-- Relay 3 Controls -->
+                            <div class="mb-4 pb-3 border-b border-gray-700">
+                                <div class="text-xs font-semibold accent-relay mb-2">RELAY 3</div>
+                                <div class="flex items-center gap-1">
+                                    <button id="relay3Off" onclick="setRelay(3, 'off')" class="btn-secondary px-3 py-1 text-xs flex-1">OFF</button>
+                                    <button id="relay3On" onclick="setRelay(3, 'on')" class="btn-success px-3 py-1 text-xs flex-1">ON</button>
+                                </div>
+                            </div>
+
+                            <!-- Relay 4 Controls -->
+                            <div>
+                                <div class="text-xs font-semibold accent-relay mb-2">RELAY 4</div>
+                                <div class="flex items-center gap-1">
+                                    <button id="relay4Off" onclick="setRelay(4, 'off')" class="btn-secondary px-3 py-1 text-xs flex-1">OFF</button>
+                                    <button id="relay4On" onclick="setRelay(4, 'on')" class="btn-success px-3 py-1 text-xs flex-1">ON</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Resize Handle for Sidebar -->
+            <div class="resize-handle resize-handle-vertical" 
+                 onmousedown="startResize(event, 'leftSidebar', 'horizontal')"></div>
+
+            <!-- Scratch-like Block Editor -->
+            <div class="flex flex-col min-h-0 gap-2 flex-1 min-w-0">
+                <div class="card p-2 flex flex-col flex-1 min-h-0">
+                    <div class="flex items-center justify-between mb-2 flex-shrink-0">
+                        <h2 class="text-sm font-semibold text-white">WORKSPACE</h2>
+                        <div class="flex items-center gap-2">
+                            <button onclick="createNewWorkflow()" 
+                                    class="btn-success px-2.5 py-1 text-xs font-medium">
+                                + WORKFLOW
+                            </button>
+                            <button id="playBtn" onclick="startExecution()" 
+                                    class="btn-primary px-2.5 py-1 text-xs font-medium">
+                                ▶ START
+                            </button>
+                            <button onclick="stopExecution()" 
+                                    class="btn-secondary px-2.5 py-1 text-xs font-medium">
+                                ⏹ STOP
+                            </button>
+                            <button onclick="clearWorkspace()" 
+                                    class="btn-danger px-2.5 py-1 text-xs font-medium">
+                                CLEAR
+                            </button>
+                        </div>
+                    </div>
+                    <div id="workspaceCanvas" class="workspace-canvas flex-1 min-h-0" style="position: relative;">
+                        <!-- Workspace Toolbar -->
+                        <div id="workspaceToolbar" class="workspace-toolbar">
+                            <span class="text-xs text-gray-400">Auto Wire:</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="autoWireToggle" checked onchange="toggleAutoWire()">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span id="autoWireStatus" class="text-xs font-medium text-green-400">ON</span>
+                            <button onclick="cleanUpWorkspace()" 
+                                    class="btn-secondary px-2.5 py-1 text-xs font-medium"
+                                    title="Organize blocks into neat columns and rows">
+                                🧹 CLEAN UP
+                            </button>
+                        </div>
+                        <!-- Blocks will be placed here -->
+                    </div>
+                </div>
+
+                <!-- Resize Handle for Bottom Panel -->
+                <div class="resize-handle resize-handle-horizontal" 
+                     onmousedown="startResize(event, 'bottomPanel', 'vertical')"></div>
+                
+                <!-- Playback/Output Switchable Panel -->
+                <div id="bottomPanel" class="card flex flex-col flex-shrink-0" style="height: 150px; min-height: 100px; max-height: 50%;">
+                    <!-- Bottom Panel Tabs -->
+                    <div class="flex border-b border-gray-700 flex-shrink-0">
+                        <button onclick="switchBottomPanel('playback')" 
+                                id="bottomTab-playback"
+                                class="bottom-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors active">
+                            PLAYBACK
+                        </button>
+                        <button onclick="switchBottomPanel('output')" 
+                                id="bottomTab-output"
+                                class="bottom-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
+                            OUTPUT
+                        </button>
+                    </div>
+                    
+                    <!-- Bottom Panel Content -->
+                    <div class="p-3 flex-1 min-h-0 overflow-hidden">
+                        <!-- Playback Panel -->
+                        <div id="bottomPanel-playback" class="bottom-panel h-full">
+                            <div id="activeBlocksPanel" class="bg-black p-3 h-full overflow-y-auto space-y-2">
+                                <p class="text-xs text-gray-500 text-center py-4">No blocks executing</p>
+                            </div>
+                        </div>
+
+                        <!-- Output/Log Panel -->
+                        <div id="bottomPanel-output" class="bottom-panel hidden h-full">
+                            <div id="logArea" class="bg-black p-3 h-full overflow-y-auto font-mono text-xs space-y-1">
+                                <p class="text-gray-400">[SYSTEM] Initializing ROS Bridge connection...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Modules -->
+    <script src="{{ url_for('static', filename='js/config.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/uiUtils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/rosBridge.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/motorSpeedManager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/blockSystem.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/blockRenderer.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/workflowManager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/blockConnector.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/storageManager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/executionEngine.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/activeBlocksPanel.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script>
+        // Global function for motor speed updates
+        function updateMotorSpeed(motorId, speed) {
+            MotorSpeedManager.setSpeed(motorId, speed);
+        }
+
+        // Manual motor controls
+        const manualControlState = {
+            runningMotors: new Set() // Track which motors are running continuously
+        };
+
+        function nudgeMotor(motorId, steps) {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const success = ROSBridge.publishMotorCommand(motorId, steps);
+            if (success) {
+                UIUtils.log(`[MANUAL] Motor ${motorId}: ${steps > 0 ? '+' : ''}${steps} steps`, 'success');
+            }
+        }
+
+        function moveMotorSteps(motorId) {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const input = document.getElementById(`motor${motorId}StepsInput`);
+            if (!input) {
+                UIUtils.log(`[ERROR] Steps input for Motor ${motorId} not found`, 'error');
+                return;
+            }
+            const steps = parseInt(input.value) || 0;
+            if (steps === 0) {
+                UIUtils.log(`[ERROR] Please enter a non-zero number of steps`, 'error');
+                return;
+            }
+            if (Math.abs(steps) > 10000) {
+                UIUtils.log(`[ERROR] Steps must be between -10000 and 10000`, 'error');
+                return;
+            }
+            const success = ROSBridge.publishMotorCommand(motorId, steps);
+            if (success) {
+                UIUtils.log(`[MANUAL] Motor ${motorId}: ${steps > 0 ? '+' : ''}${steps} steps`, 'success');
+            }
+        }
+
+        function nudgeBothMotors(steps) {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const success1 = ROSBridge.publishMotorCommand(1, steps);
+            const success2 = ROSBridge.publishMotorCommand(2, steps);
+            if (success1 && success2) {
+                UIUtils.log(`[MANUAL] Both Motors: ${steps > 0 ? '+' : ''}${steps} steps`, 'success');
+            }
+        }
+
+        function moveBothMotorsSteps() {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const input = document.getElementById('bothMotorsStepsInput');
+            if (!input) {
+                UIUtils.log(`[ERROR] Steps input for both motors not found`, 'error');
+                return;
+            }
+            const steps = parseInt(input.value) || 0;
+            if (steps === 0) {
+                UIUtils.log(`[ERROR] Please enter a non-zero number of steps`, 'error');
+                return;
+            }
+            if (Math.abs(steps) > 10000) {
+                UIUtils.log(`[ERROR] Steps must be between -10000 and 10000`, 'error');
+                return;
+            }
+            const success1 = ROSBridge.publishMotorCommand(1, steps);
+            const success2 = ROSBridge.publishMotorCommand(2, steps);
+            if (success1 && success2) {
+                UIUtils.log(`[MANUAL] Both Motors: ${steps > 0 ? '+' : ''}${steps} steps`, 'success');
+            }
+        }
+
+        function runBothMotors(direction) {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const steps = direction > 0 ? 10000 : -10000;
+            const success1 = ROSBridge.publishMotorCommand(1, steps);
+            const success2 = ROSBridge.publishMotorCommand(2, steps);
+            if (success1 && success2) {
+                manualControlState.runningMotors.add(1);
+                manualControlState.runningMotors.add(2);
+                updateMotorRunButtons(1);
+                updateMotorRunButtons(2);
+                updateBothMotorsRunButtons();
+                UIUtils.log(`[MANUAL] Both Motors: Running ${direction > 0 ? 'forward' : 'backward'}`, 'success');
+            }
+        }
+
+        function stopBothMotors() {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const success1 = ROSBridge.publishMotorCommand(1, 0);
+            const success2 = ROSBridge.publishMotorCommand(2, 0);
+            if (success1 && success2) {
+                manualControlState.runningMotors.delete(1);
+                manualControlState.runningMotors.delete(2);
+                updateMotorRunButtons(1);
+                updateMotorRunButtons(2);
+                updateBothMotorsRunButtons();
+                UIUtils.log(`[MANUAL] Both Motors: Stopped`, 'warning');
+            }
+        }
+
+        function updateBothMotorsRunButtons() {
+            const motor1Running = manualControlState.runningMotors.has(1);
+            const motor2Running = manualControlState.runningMotors.has(2);
+            const bothRunning = motor1Running && motor2Running;
+            const eitherRunning = motor1Running || motor2Running;
+            
+            const forwardBtn = document.getElementById('bothMotorsRunForward');
+            const backwardBtn = document.getElementById('bothMotorsRunBackward');
+            const stopBtn = document.getElementById('bothMotorsStop');
+            
+            if (forwardBtn) {
+                forwardBtn.disabled = eitherRunning;
+                forwardBtn.style.opacity = eitherRunning ? '0.5' : '1';
+            }
+            if (backwardBtn) {
+                backwardBtn.disabled = eitherRunning;
+                backwardBtn.style.opacity = eitherRunning ? '0.5' : '1';
+            }
+            if (stopBtn) {
+                stopBtn.disabled = !eitherRunning;
+                stopBtn.style.opacity = eitherRunning ? '1' : '0.5';
+            }
+        }
+
+        function runMotor(motorId, direction) {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            // Use a large step count for continuous running
+            const steps = direction > 0 ? 10000 : -10000;
+            const success = ROSBridge.publishMotorCommand(motorId, steps);
+            if (success) {
+                manualControlState.runningMotors.add(motorId);
+                updateMotorRunButtons(motorId);
+                UIUtils.log(`[MANUAL] Motor ${motorId}: Running ${direction > 0 ? 'forward' : 'backward'}`, 'success');
+            }
+        }
+
+        function stopMotor(motorId) {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const success = ROSBridge.publishMotorCommand(motorId, 0);
+            if (success) {
+                manualControlState.runningMotors.delete(motorId);
+                updateMotorRunButtons(motorId);
+                UIUtils.log(`[MANUAL] Motor ${motorId}: Stopped`, 'warning');
+            }
+        }
+
+        function updateMotorRunButtons(motorId) {
+            const isRunning = manualControlState.runningMotors.has(motorId);
+            const forwardBtn = document.getElementById(`motor${motorId}RunForward`);
+            const backwardBtn = document.getElementById(`motor${motorId}RunBackward`);
+            const stopBtn = document.getElementById(`motor${motorId}Stop`);
+            
+            if (forwardBtn) {
+                forwardBtn.disabled = isRunning;
+                forwardBtn.style.opacity = isRunning ? '0.5' : '1';
+            }
+            if (backwardBtn) {
+                backwardBtn.disabled = isRunning;
+                backwardBtn.style.opacity = isRunning ? '0.5' : '1';
+            }
+            if (stopBtn) {
+                stopBtn.disabled = !isRunning;
+                stopBtn.style.opacity = isRunning ? '1' : '0.5';
+            }
+            
+            // Also update both motors buttons if they exist
+            if (typeof updateBothMotorsRunButtons === 'function') {
+                updateBothMotorsRunButtons();
+            }
+        }
+
+        function setRelay(relayId, state) {
+            if (!ROSBridge.isConnected) {
+                UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+                return;
+            }
+            const success = ROSBridge.publishRelayCommand(relayId, state);
+            if (success) {
+                UIUtils.log(`[MANUAL] Relay ${relayId}: ${state.toUpperCase()}`, 'success');
+                updateRelayButtons(relayId, state);
+            }
+        }
+
+        function updateRelayButtons(relayId, state) {
+            const onBtn = document.getElementById(`relay${relayId}On`);
+            const offBtn = document.getElementById(`relay${relayId}Off`);
+            
+            if (onBtn && offBtn) {
+                // Reset all classes
+                onBtn.className = 'btn-success px-3 py-1 text-xs flex-1';
+                offBtn.className = 'btn-secondary px-3 py-1 text-xs flex-1';
+                
+                if (state === 'on') {
+                    // Relay is ON: ON button is active (success), OFF button available
+                    onBtn.classList.add('opacity-75');
+                    onBtn.style.border = '2px solid #10b981';
+                } else {
+                    // Relay is OFF: OFF button is active (secondary), ON button available
+                    offBtn.classList.add('opacity-75');
+                    offBtn.style.border = '2px solid #3a3a3a';
+                }
+            }
+        }
+
+        // Initialize motor run buttons and relay states
+        window.addEventListener('DOMContentLoaded', function() {
+            updateMotorRunButtons(1);
+            updateMotorRunButtons(2);
+            updateBothMotorsRunButtons();
+            // Initialize relay buttons to show OFF state
+            for (let i = 1; i <= 4; i++) {
+                updateRelayButtons(i, 'off');
+            }
+            // Load saved panel sizes
+            loadPanelSizes();
+        });
+
+        // Sidebar tab switching
+        function switchSidebarTab(tabName) {
+            // Hide all panels
+            document.querySelectorAll('.sidebar-panel').forEach(panel => {
+                panel.classList.add('hidden');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.sidebar-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected panel
+            const panel = document.getElementById(`sidebarPanel-${tabName}`);
+            if (panel) {
+                panel.classList.remove('hidden');
+            }
+            
+            // Add active class to selected tab
+            const tab = document.getElementById(`sidebarTab-${tabName}`);
+            if (tab) {
+                tab.classList.add('active');
+            }
+        }
+
+        // Bottom panel tab switching
+        function switchBottomPanel(panelName) {
+            // Hide all panels
+            document.querySelectorAll('.bottom-panel').forEach(panel => {
+                panel.classList.add('hidden');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.bottom-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected panel
+            const panel = document.getElementById(`bottomPanel-${panelName}`);
+            if (panel) {
+                panel.classList.remove('hidden');
+            }
+            
+            // Add active class to selected tab
+            const tab = document.getElementById(`bottomTab-${panelName}`);
+            if (tab) {
+                tab.classList.add('active');
+            }
+        }
+
+        // Panel Resizing
+        let isResizing = false;
+        let resizeElement = null;
+        let resizeType = null;
+        let startX = 0;
+        let startY = 0;
+        let startWidth = 0;
+        let startHeight = 0;
+
+        function startResize(e, elementId, type) {
+            e.preventDefault();
+            isResizing = true;
+            resizeElement = document.getElementById(elementId);
+            resizeType = type;
+            
+            if (type === 'horizontal') {
+                startX = e.clientX;
+                startWidth = resizeElement.offsetWidth;
+            } else if (type === 'vertical') {
+                startY = e.clientY;
+                startHeight = resizeElement.offsetHeight;
+            }
+            
+            document.addEventListener('mousemove', handleResize);
+            document.addEventListener('mouseup', stopResize);
+            document.body.style.cursor = type === 'horizontal' ? 'col-resize' : 'row-resize';
+            document.body.style.userSelect = 'none';
+        }
+
+        function handleResize(e) {
+            if (!isResizing || !resizeElement) return;
+            
+            if (resizeType === 'horizontal') {
+                const diff = e.clientX - startX;
+                const newWidth = startWidth + diff;
+                const container = resizeElement.parentElement;
+                const containerWidth = container.offsetWidth;
+                const minWidth = 200;
+                const maxWidth = containerWidth * 0.5;
+                
+                if (newWidth >= minWidth && newWidth <= maxWidth) {
+                    resizeElement.style.width = newWidth + 'px';
+                }
+            } else if (resizeType === 'vertical') {
+                const diff = -(e.clientY - startY); // Positive when dragging down
+                const newHeight = startHeight + diff; // Increase height when dragging down (handle at top of panel)
+                const container = resizeElement.parentElement;
+                const containerHeight = container.offsetHeight;
+                const minHeight = 100;
+                const maxHeight = containerHeight * 0.5;
+                
+                if (newHeight >= minHeight && newHeight <= maxHeight) {
+                    resizeElement.style.height = newHeight + 'px';
+                }
+            }
+        }
+
+        function stopResize() {
+            if (isResizing && resizeElement) {
+                // Save panel sizes to localStorage
+                savePanelSizes();
+            }
+            isResizing = false;
+            resizeElement = null;
+            resizeType = null;
+            document.removeEventListener('mousemove', handleResize);
+            document.removeEventListener('mouseup', stopResize);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+
+        // Save panel sizes to localStorage
+        function savePanelSizes() {
+            const leftSidebar = document.getElementById('leftSidebar');
+            const bottomPanel = document.getElementById('bottomPanel');
+            
+            if (leftSidebar) {
+                // Save the actual computed width in pixels
+                const width = leftSidebar.style.width || leftSidebar.offsetWidth + 'px';
+                localStorage.setItem('panelLeftSidebarWidth', width);
+            }
+            if (bottomPanel) {
+                // Save the actual computed height in pixels
+                const height = bottomPanel.style.height || bottomPanel.offsetHeight + 'px';
+                localStorage.setItem('panelBottomPanelHeight', height);
+            }
+        }
+
+        // Load panel sizes from localStorage
+        function loadPanelSizes() {
+            const leftSidebar = document.getElementById('leftSidebar');
+            const bottomPanel = document.getElementById('bottomPanel');
+            
+            if (leftSidebar) {
+                const savedWidth = localStorage.getItem('panelLeftSidebarWidth');
+                if (savedWidth) {
+                    leftSidebar.style.width = savedWidth;
+                }
+            }
+            if (bottomPanel) {
+                const savedHeight = localStorage.getItem('panelBottomPanelHeight');
+                if (savedHeight) {
+                    bottomPanel.style.height = savedHeight;
+                }
+            }
+        }
+
+        // Reset panel layout to default sizes
+        function resetPanelLayout() {
+            const leftSidebar = document.getElementById('leftSidebar');
+            const bottomPanel = document.getElementById('bottomPanel');
+            
+            if (leftSidebar) {
+                leftSidebar.style.width = '25%';
+            }
+            if (bottomPanel) {
+                bottomPanel.style.height = '150px';
+            }
+            
+            // Clear saved sizes from localStorage
+            localStorage.removeItem('panelLeftSidebarWidth');
+            localStorage.removeItem('panelBottomPanelHeight');
+        }
+
+        // Handle ROS trigger topic dropdown change
+        function handleRosTriggerTopicChange(selectElement) {
+            const customInput = selectElement.parentElement.querySelector('input[data-param="topic"]');
+            if (selectElement.value === '/topic') {
+                customInput.style.display = 'block';
+                customInput.value = '';
+            } else {
+                customInput.style.display = 'none';
+                customInput.value = selectElement.value;
+            }
+        }
+        
+        // Toggle auto-wire mode
+        function toggleAutoWire() {
+            const toggle = document.getElementById('autoWireToggle');
+            const status = document.getElementById('autoWireStatus');
+            
+            if (toggle.checked) {
+                // Auto-wire ON
+                BlockConnector.setAutoWire(true);
+                status.textContent = 'ON';
+                status.className = 'text-xs font-medium text-green-400';
+            } else {
+                // Auto-wire OFF (manual mode)
+                BlockConnector.setAutoWire(false);
+                status.textContent = 'OFF';
+                status.className = 'text-xs font-medium text-yellow-400';
+            }
+        }
+        
+        // Clean up workspace layout
+        function cleanUpWorkspace() {
+            WorkflowManager.cleanUpLayout();
+        }
+    </script>
+</body>
+</html>
