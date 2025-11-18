@@ -64,6 +64,30 @@ const BlockSystem = {
                 const durationInput = blockElement.querySelector('[data-param="duration"]');
                 const duration = durationInput ? parseFloat(durationInput.value) || 1.0 : 1.0;
                 data.duration = this.validateTime(duration);
+            } else if (type === 'repeat') {
+                const countInput = blockElement.querySelector('[data-param="count"]');
+                const count = countInput ? parseInt(countInput.value) || 10 : 10;
+                data.count = Math.max(1, count);
+            } else if (type === 'forever' || type === 'break') {
+                // These types don't need additional parameters
+            } else if (type === 'wait-sensor') {
+                const sensorIdInput = blockElement.querySelector('[data-param="sensorId"]');
+                const conditionSelect = blockElement.querySelector('[data-param="condition"]');
+                const thresholdInput = blockElement.querySelector('[data-param="threshold"]');
+                const timeoutInput = blockElement.querySelector('[data-param="timeout"]');
+                
+                data.sensorId = sensorIdInput ? (sensorIdInput.value || '') : '';
+                data.condition = conditionSelect ? (conditionSelect.value || 'HIGH') : 'HIGH';
+                data.threshold = thresholdInput ? (parseFloat(thresholdInput.value) || 0.0) : 0.0;
+                data.timeout = timeoutInput ? (parseFloat(timeoutInput.value) || 0.0) : 0.0;
+            } else if (type === 'read-sensor') {
+                const sensorIdInput = blockElement.querySelector('[data-param="sensorId"]');
+                data.sensorId = sensorIdInput ? (sensorIdInput.value || '') : '';
+            } else if (type === 'try' || type === 'catch') {
+                // These types don't need additional parameters
+            } else if (type === 'throw-error') {
+                const errorMessageInput = blockElement.querySelector('[data-param="errorMessage"]');
+                data.errorMessage = errorMessageInput ? (errorMessageInput.value || '') : '';
             } else if (type === 'ros-trigger') {
                 // Handle both select dropdown and text input for topic
                 const topicSelect = blockElement.querySelector('select[data-param="topic"]');
@@ -223,7 +247,19 @@ const BlockSystem = {
         } else if (templateData.type === 'ros-trigger') {
             block.topic = templateData.topic || '/rosout';
             block.expectedString = templateData.expectedString || '';
+        } else if (templateData.type === 'repeat') {
+            block.count = templateData.count || 10;
+        } else if (templateData.type === 'wait-sensor') {
+            block.sensorId = templateData.sensorId || '';
+            block.condition = templateData.condition || 'HIGH';
+            block.threshold = templateData.threshold || 0.0;
+            block.timeout = templateData.timeout || 0.0;
+        } else if (templateData.type === 'read-sensor') {
+            block.sensorId = templateData.sensorId || '';
+        } else if (templateData.type === 'throw-error') {
+            block.errorMessage = templateData.errorMessage || '';
         }
+        // Note: pause, forever, break, try, catch don't need additional properties beyond type
         
         // Validate the created block
         const validation = this.validateBlock(block);
@@ -239,17 +275,58 @@ const BlockSystem = {
     /**
      * Calculate block width based on its properties
      * @param {Object} blockData - Block data
-     * @returns {number} - Block width in pixels
+     * @returns {number} - Block width in pixels (always odd multiple of grid size)
      */
     calculateBlockWidth(blockData) {
-        // Keep blocks at a fixed width to prevent expansion with larger values
-        // The width should accommodate the content but not grow excessively
-        if (blockData.type === 'motor' || blockData.type === 'delay') {
-            // Use a more reasonable calculation - minimal growth for very large values
-            // Most blocks should stay close to default width
-            return Config.BLOCK_DEFAULT_WIDTH;
+        const gridSize = 20;
+        const baseWidth = Config.BLOCK_DEFAULT_WIDTH;
+        
+        // Round to nearest odd multiple of grid size
+        // This ensures connectors are always in the center of grid cells
+        const gridUnits = Math.round(baseWidth / gridSize);
+        // Make it odd (if even, add 1)
+        const oddGridUnits = gridUnits % 2 === 0 ? gridUnits + 1 : gridUnits;
+        // Ensure minimum of 5 grid units (100px)
+        const finalGridUnits = Math.max(5, oddGridUnits);
+        
+        return finalGridUnits * gridSize;
+    },
+    
+    /**
+     * Calculate block height based on its content
+     * @param {Object} blockData - Block data
+     * @returns {number} - Block height in pixels (always odd multiple of grid size)
+     */
+    calculateBlockHeight(blockData) {
+        const gridSize = 20;
+        // Base height for most blocks - increased to prevent cutting
+        let baseHeight = 100; // 5 grid units (already odd)
+        
+        // Adjust for blocks with more content - ensure enough space for all fields
+        if (blockData.type === 'wait-sensor') {
+            // Has: header + sensor input + condition dropdown + threshold input + timeout input
+            // Each field ~20-25px, plus gaps and padding
+            baseHeight = 200; // 10 grid units -> will become 11 (odd) = 220px
+        } else if (blockData.type === 'ros-trigger') {
+            // Has: header + topic section (label + select + conditional input) + wait for text (label + input + help)
+            // Needs more space for all the inputs and help text
+            baseHeight = 200; // 10 grid units -> will become 11 (odd) = 220px
+        } else if (blockData.type === 'read-sensor' || blockData.type === 'throw-error') {
+            // Has: header + one input field
+            baseHeight = 120; // 6 grid units -> will become 7 (odd) = 140px
+        } else if (blockData.type === 'motor' || blockData.type === 'relay' || blockData.type === 'delay' || blockData.type === 'repeat') {
+            baseHeight = 100; // 5 grid units (already odd) = 100px
+        } else if (blockData.type === 'event') {
+            baseHeight = 100; // 5 grid units (already odd) = 100px
         }
-        return Config.BLOCK_DEFAULT_WIDTH;
+        
+        // Round to nearest odd multiple of grid size
+        const gridUnits = Math.round(baseHeight / gridSize);
+        const oddGridUnits = gridUnits % 2 === 0 ? gridUnits + 1 : gridUnits;
+        // Ensure minimum of 5 grid units (100px) for better content visibility
+        const finalGridUnits = Math.max(5, oddGridUnits);
+        
+        return finalGridUnits * gridSize;
     },
     
     /**
@@ -344,7 +421,15 @@ const BlockSystem = {
             'ros-trigger': 'block-trigger',
             'event': 'block-event',
             'pause': 'block-pause',
-            'delay': 'block-delay'
+            'delay': 'block-delay',
+            'repeat': 'block-loop',
+            'forever': 'block-loop',
+            'break': 'block-loop',
+            'wait-sensor': 'block-sensor',
+            'read-sensor': 'block-sensor',
+            'try': 'block-error',
+            'catch': 'block-error',
+            'throw-error': 'block-error'
         };
         return classMap[type] || '';
     }

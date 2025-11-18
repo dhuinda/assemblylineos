@@ -31,6 +31,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
   RENAME relay_controller
 )
+install(PROGRAMS
+  ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/sensor_controller.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME sensor_controller
+)
 
 # Install templates, static files, and launch files
 install(DIRECTORY templates static launch

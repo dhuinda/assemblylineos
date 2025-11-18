@@ -14,8 +14,8 @@
     <!-- Custom Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body class="h-screen p-2 overflow-hidden flex flex-col">
-    <div class="w-full flex-1 flex flex-col min-w-0">
+<body class="h-screen p-2 overflow-hidden flex flex-col" style="height: 100vh; max-height: 100vh; overflow: hidden;">
+    <div class="w-full flex-1 flex flex-col min-w-0" style="min-height: 0; max-height: 100%; overflow: hidden;">
         <!-- Header -->
         <div class="card px-2 py-1 mb-1 flex-shrink-0">
             <div class="flex items-center gap-3 flex-wrap">
@@ -54,6 +54,14 @@
                         RESET VIEW
                     </button>
                 </div>
+                <div class="flex items-center gap-2 border-l border-gray-700 pl-2">
+                    <label class="text-xs text-gray-500 whitespace-nowrap">Simulation:</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="simulationToggle" onchange="toggleSimulation()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span id="simulationStatus" class="text-xs font-medium text-gray-500 whitespace-nowrap">OFF</span>
+                </div>
                 <div class="flex items-center gap-2 border-l border-gray-700 pl-2 ml-auto">
                     <p id="rosStatus" class="text-xs status-disconnected font-medium whitespace-nowrap">● DISCONNECTED</p>
                     <p class="text-xs text-gray-500 whitespace-nowrap">ws://localhost:9090</p>
@@ -61,10 +69,10 @@
             </div>
         </div>
 
-        <div class="flex flex-1 min-h-0 w-full gap-2">
+        <div class="flex flex-1 min-h-0 w-full gap-2" style="overflow: hidden;">
             <!-- Left Sidebar with Tabs -->
-            <div id="leftSidebar" class="flex flex-col min-h-0" style="width: 25%; min-width: 200px; max-width: 50%;">
-                <div class="card flex flex-col flex-1 min-h-0">
+            <div id="leftSidebar" class="flex flex-col min-h-0" style="width: 25%; min-width: 200px; max-width: 50%; height: 100%; overflow: hidden;">
+                <div class="card flex flex-col flex-1 min-h-0" style="height: 100%; overflow: hidden;">
                     <!-- Sidebar Tabs -->
                     <div class="flex border-b border-gray-700 flex-shrink-0">
                         <button onclick="switchSidebarTab('palette')" 
@@ -85,119 +93,252 @@
                     </div>
                     
                     <!-- Sidebar Content -->
-                    <div class="p-3 overflow-y-auto flex-1 min-h-0">
+                    <div class="p-3 flex-1 min-h-0" style="overflow-y: auto; overflow-x: hidden;">
                         <!-- Block Palette Panel -->
                         <div id="sidebarPanel-palette" class="sidebar-panel">
                             <div class="space-y-2" id="blockPalette">
-                                <!-- Event Blocks -->
-                                <div class="block block-event card p-2" data-type="event" data-event-type="green-flag" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-trigger font-medium text-xs">▶ WHEN START CLICKED</span>
+                                <!-- Events Section -->
+                                <div class="palette-section">
+                                    <div class="palette-section-header" onclick="togglePaletteSection(this)">
+                                        <span class="section-title">Events</span>
+                                        <span class="section-toggle">▼</span>
                                     </div>
-                                </div>
-                                <div class="block block-event card p-2" data-type="event" data-event-type="workflow-complete" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-trigger font-medium text-xs">⚡ WHEN WORKFLOW COMPLETE</span>
-                                    </div>
-                                </div>
-                                
-                                <!-- Motor Blocks -->
-                                <div class="block block-motor card p-2" data-type="motor" data-motor-id="1" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-motor font-medium text-xs">MOTOR 1</span>
-                                        <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
-                                               placeholder="steps" data-param="steps" value="0">
-                                    </div>
-                                </div>
-                                <div class="block block-motor card p-2" data-type="motor" data-motor-id="2" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-motor font-medium text-xs">MOTOR 2</span>
-                                        <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
-                                               placeholder="steps" data-param="steps" value="0">
-                                    </div>
-                                </div>
-                                
-                                <!-- Relay Blocks -->
-                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="1" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-relay font-medium text-xs">RELAY 1</span>
-                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
-                                                data-param="state">
-                                            <option value="on">ON</option>
-                                            <option value="off">OFF</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="2" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-relay font-medium text-xs">RELAY 2</span>
-                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
-                                                data-param="state">
-                                            <option value="on">ON</option>
-                                            <option value="off">OFF</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="3" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-relay font-medium text-xs">RELAY 3</span>
-                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
-                                                data-param="state">
-                                            <option value="on">ON</option>
-                                            <option value="off">OFF</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div class="block block-relay card p-2" data-type="relay" data-relay-id="4" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-relay font-medium text-xs">RELAY 4</span>
-                                        <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
-                                                data-param="state">
-                                            <option value="on">ON</option>
-                                            <option value="off">OFF</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                
-                                <!-- Pause Block -->
-                                <div class="block block-pause card p-2" data-type="pause" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-pause font-medium text-xs">PAUSE</span>
-                                    </div>
-                                </div>
-                                
-                                <!-- Delay Block -->
-                                <div class="block block-delay card p-2" data-type="delay" draggable="true">
-                                    <div class="flex items-center justify-between">
-                                        <span class="accent-delay font-medium text-xs">DELAY</span>
-                                        <input type="number" step="0.1" class="w-14 px-2 py-1 text-xs text-white accent-delay" 
-                                               placeholder="s" data-param="duration" value="1.0">
-                                    </div>
-                                </div>
-                                
-                                <!-- ROS Topic Trigger Block -->
-                                <div class="block block-trigger card p-2" data-type="ros-trigger" draggable="true">
-                                    <div class="flex flex-col gap-1">
-                                        <span class="accent-trigger font-medium text-xs">WAIT FOR ROS TOPIC</span>
-                                        <div class="flex flex-col gap-0.5">
-                                            <label class="text-xs text-gray-400">Topic:</label>
-                                            <select class="w-full px-2 py-1 text-xs text-white accent-trigger" 
-                                                    data-param="topic"
-                                                    onchange="handleRosTriggerTopicChange(this)">
-                                                <option value="/rosout">/rosout (Log messages)</option>
-                                                <option value="/motor1/status">/motor1/status</option>
-                                                <option value="/motor2/status">/motor2/status</option>
-                                                <option value="/topic">Custom topic...</option>
-                                            </select>
-                                            <input type="text" class="w-full px-2 py-1 text-xs text-white accent-trigger mt-0.5" 
-                                                   placeholder="/custom/topic" data-param="topic" value="/rosout"
-                                                   style="display: none;"
-                                                   onclick="event.stopPropagation()">
+                                    <div class="palette-section-content space-y-2">
+                                        <div class="block block-event card p-2" data-type="event" data-event-type="green-flag" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-trigger font-medium text-xs">▶ WHEN START CLICKED</span>
+                                            </div>
                                         </div>
-                                        <div class="flex flex-col gap-0.5">
-                                            <label class="text-xs text-gray-400">Wait for text:</label>
-                                            <input type="text" class="w-full px-2 py-1 text-xs text-white accent-trigger" 
-                                                   placeholder="e.g., Motor 1 finished" data-param="expectedString" value="">
+                                        <div class="block block-event card p-2" data-type="event" data-event-type="workflow-complete" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-trigger font-medium text-xs">⚡ WHEN WORKFLOW COMPLETE</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Motors Section -->
+                                <div class="palette-section">
+                                    <div class="palette-section-header" onclick="togglePaletteSection(this)">
+                                        <span class="section-title">Motors</span>
+                                        <span class="section-toggle">▼</span>
+                                    </div>
+                                    <div class="palette-section-content space-y-2">
+                                        <div class="block block-motor card p-2" data-type="motor" data-motor-id="1" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-motor font-medium text-xs">MOTOR 1</span>
+                                                <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
+                                                       placeholder="steps" data-param="steps" value="0">
+                                            </div>
+                                        </div>
+                                        <div class="block block-motor card p-2" data-type="motor" data-motor-id="2" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-motor font-medium text-xs">MOTOR 2</span>
+                                                <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
+                                                       placeholder="steps" data-param="steps" value="0">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Relays Section -->
+                                <div class="palette-section">
+                                    <div class="palette-section-header" onclick="togglePaletteSection(this)">
+                                        <span class="section-title">Relays</span>
+                                        <span class="section-toggle">▼</span>
+                                    </div>
+                                    <div class="palette-section-content space-y-2">
+                                        <div class="block block-relay card p-2" data-type="relay" data-relay-id="1" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-relay font-medium text-xs">RELAY 1</span>
+                                                <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                        data-param="state">
+                                                    <option value="on">ON</option>
+                                                    <option value="off">OFF</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="block block-relay card p-2" data-type="relay" data-relay-id="2" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-relay font-medium text-xs">RELAY 2</span>
+                                                <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                        data-param="state">
+                                                    <option value="on">ON</option>
+                                                    <option value="off">OFF</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="block block-relay card p-2" data-type="relay" data-relay-id="3" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-relay font-medium text-xs">RELAY 3</span>
+                                                <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                        data-param="state">
+                                                    <option value="on">ON</option>
+                                                    <option value="off">OFF</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="block block-relay card p-2" data-type="relay" data-relay-id="4" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-relay font-medium text-xs">RELAY 4</span>
+                                                <select class="w-14 px-2 py-1 text-xs text-white accent-relay" 
+                                                        data-param="state">
+                                                    <option value="on">ON</option>
+                                                    <option value="off">OFF</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Control Flow Section -->
+                                <div class="palette-section">
+                                    <div class="palette-section-header" onclick="togglePaletteSection(this)">
+                                        <span class="section-title">Control Flow</span>
+                                        <span class="section-toggle">▼</span>
+                                    </div>
+                                    <div class="palette-section-content space-y-2">
+                                        <div class="block block-pause card p-2" data-type="pause" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-pause font-medium text-xs">PAUSE</span>
+                                            </div>
+                                        </div>
+                                        <div class="block block-delay card p-2" data-type="delay" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-delay font-medium text-xs">DELAY</span>
+                                                <input type="number" step="0.1" class="w-14 px-2 py-1 text-xs text-white accent-delay" 
+                                                       placeholder="s" data-param="duration" value="1.0">
+                                            </div>
+                                        </div>
+                                        <div class="block block-loop card p-2" data-type="repeat" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-loop font-medium text-xs">REPEAT</span>
+                                                <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-loop" 
+                                                       placeholder="times" data-param="count" value="10" min="1">
+                                            </div>
+                                        </div>
+                                        <div class="block block-loop card p-2" data-type="forever" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-loop font-medium text-xs">FOREVER</span>
+                                            </div>
+                                        </div>
+                                        <div class="block block-loop card p-2" data-type="break" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-loop font-medium text-xs">BREAK</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Sensors Section -->
+                                <div class="palette-section">
+                                    <div class="palette-section-header" onclick="togglePaletteSection(this)">
+                                        <span class="section-title">Sensors</span>
+                                        <span class="section-toggle">▼</span>
+                                    </div>
+                                    <div class="palette-section-content space-y-2">
+                                        <div class="block block-sensor card p-2" data-type="wait-sensor" draggable="true">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="accent-sensor font-medium text-xs">WAIT FOR SENSOR</span>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Sensor:</label>
+                                                    <input type="text" class="w-full px-2 py-1 text-xs text-white accent-sensor" 
+                                                           placeholder="sensor_id" data-param="sensorId" value="">
+                                                </div>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Condition:</label>
+                                                    <select class="w-full px-2 py-1 text-xs text-white accent-sensor" 
+                                                            data-param="condition">
+                                                        <option value="HIGH">HIGH</option>
+                                                        <option value="LOW">LOW</option>
+                                                        <option value=">">Greater than</option>
+                                                        <option value="<">Less than</option>
+                                                        <option value="==">Equal to</option>
+                                                    </select>
+                                                </div>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Threshold:</label>
+                                                    <input type="number" step="0.1" class="w-full px-2 py-1 text-xs text-white accent-sensor" 
+                                                           placeholder="0.0" data-param="threshold" value="0.0">
+                                                </div>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Timeout (s):</label>
+                                                    <input type="number" step="0.1" class="w-full px-2 py-1 text-xs text-white accent-sensor" 
+                                                           placeholder="0 = no timeout" data-param="timeout" value="0.0" min="0">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="block block-sensor card p-2" data-type="read-sensor" draggable="true">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="accent-sensor font-medium text-xs">READ SENSOR</span>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Sensor:</label>
+                                                    <input type="text" class="w-full px-2 py-1 text-xs text-white accent-sensor" 
+                                                           placeholder="sensor_id" data-param="sensorId" value="">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Error Handling Section -->
+                                <div class="palette-section">
+                                    <div class="palette-section-header" onclick="togglePaletteSection(this)">
+                                        <span class="section-title">Error Handling</span>
+                                        <span class="section-toggle">▼</span>
+                                    </div>
+                                    <div class="palette-section-content space-y-2">
+                                        <div class="block block-error card p-2" data-type="try" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-error font-medium text-xs">TRY</span>
+                                            </div>
+                                        </div>
+                                        <div class="block block-error card p-2" data-type="catch" draggable="true">
+                                            <div class="flex items-center justify-between">
+                                                <span class="accent-error font-medium text-xs">CATCH</span>
+                                            </div>
+                                        </div>
+                                        <div class="block block-error card p-2" data-type="throw-error" draggable="true">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="accent-error font-medium text-xs">THROW ERROR</span>
+                                                <input type="text" class="w-full px-2 py-1 text-xs text-white accent-error" 
+                                                       placeholder="error message" data-param="errorMessage" value="">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- ROS Triggers Section -->
+                                <div class="palette-section">
+                                    <div class="palette-section-header" onclick="togglePaletteSection(this)">
+                                        <span class="section-title">ROS Triggers</span>
+                                        <span class="section-toggle">▼</span>
+                                    </div>
+                                    <div class="palette-section-content space-y-2">
+                                        <div class="block block-trigger card p-2" data-type="ros-trigger" draggable="true">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="accent-trigger font-medium text-xs">WAIT FOR ROS TOPIC</span>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Topic:</label>
+                                                    <select class="w-full px-2 py-1 text-xs text-white accent-trigger" 
+                                                            data-param="topic"
+                                                            onchange="handleRosTriggerTopicChange(this)">
+                                                        <option value="/rosout">/rosout (Log messages)</option>
+                                                        <option value="/motor1/status">/motor1/status</option>
+                                                        <option value="/motor2/status">/motor2/status</option>
+                                                        <option value="/topic">Custom topic...</option>
+                                                    </select>
+                                                    <input type="text" class="w-full px-2 py-1 text-xs text-white accent-trigger mt-0.5" 
+                                                           placeholder="/custom/topic" data-param="topic" value="/rosout"
+                                                           style="display: none;"
+                                                           onclick="event.stopPropagation()">
+                                                </div>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Wait for text:</label>
+                                                    <input type="text" class="w-full px-2 py-1 text-xs text-white accent-trigger" 
+                                                           placeholder="e.g., Motor 1 finished" data-param="expectedString" value="">
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -368,8 +509,8 @@
                  onmousedown="startResize(event, 'leftSidebar', 'horizontal')"></div>
 
             <!-- Scratch-like Block Editor -->
-            <div class="flex flex-col min-h-0 gap-2 flex-1 min-w-0">
-                <div class="card p-2 flex flex-col flex-1 min-h-0">
+            <div class="flex flex-col min-h-0 gap-2 flex-1 min-w-0" style="overflow: hidden;">
+                <div class="card p-2 flex flex-col flex-1 min-h-0" style="overflow: hidden;">
                     <div class="flex items-center justify-between mb-2 flex-shrink-0">
                         <h2 class="text-sm font-semibold text-white">WORKSPACE</h2>
                         <div class="flex items-center gap-2">
@@ -384,6 +525,11 @@
                             <button onclick="stopExecution()" 
                                     class="btn-secondary px-2.5 py-1 text-xs font-medium">
                                 ⏹ STOP
+                            </button>
+                            <button onclick="emergencyStop()" 
+                                    class="btn-danger px-2.5 py-1 text-xs font-medium"
+                                    title="Emergency stop - immediately stops all motors and turns off all relays">
+                                🛑 E-STOP
                             </button>
                             <button onclick="clearWorkspace()" 
                                     class="btn-danger px-2.5 py-1 text-xs font-medium">
@@ -415,7 +561,7 @@
                      onmousedown="startResize(event, 'bottomPanel', 'vertical')"></div>
                 
                 <!-- Playback/Output Switchable Panel -->
-                <div id="bottomPanel" class="card flex flex-col flex-shrink-0" style="height: 150px; min-height: 100px; max-height: 50%;">
+                <div id="bottomPanel" class="card flex flex-col" style="height: 150px; min-height: 100px; max-height: 50%; flex-shrink: 0;">
                     <!-- Bottom Panel Tabs -->
                     <div class="flex border-b border-gray-700 flex-shrink-0">
                         <button onclick="switchBottomPanel('playback')" 
@@ -454,6 +600,7 @@
     <!-- JavaScript Modules -->
     <script src="{{ url_for('static', filename='js/config.js') }}"></script>
     <script src="{{ url_for('static', filename='js/uiUtils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/simulation_engine.js') }}"></script>
     <script src="{{ url_for('static', filename='js/rosBridge.js') }}"></script>
     <script src="{{ url_for('static', filename='js/motorSpeedManager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/blockSystem.js') }}"></script>
@@ -914,6 +1061,73 @@
         // Clean up workspace layout
         function cleanUpWorkspace() {
             WorkflowManager.cleanUpLayout();
+        }
+        
+        // Simulation mode toggle
+        function toggleSimulation() {
+            const toggle = document.getElementById('simulationToggle');
+            const status = document.getElementById('simulationStatus');
+            
+            if (toggle.checked) {
+                SimulationEngine.start();
+                status.textContent = 'ON';
+                status.className = 'text-xs font-medium text-green-400 whitespace-nowrap';
+                UIUtils.log('[SIMULATION] Simulation mode enabled', 'success');
+            } else {
+                SimulationEngine.stop();
+                status.textContent = 'OFF';
+                status.className = 'text-xs font-medium text-gray-500 whitespace-nowrap';
+                UIUtils.log('[SIMULATION] Simulation mode disabled', 'warning');
+            }
+        }
+        
+        // Initialize simulation engine on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            if (typeof SimulationEngine !== 'undefined') {
+                SimulationEngine.init();
+            }
+        });
+        
+        // Emergency stop function
+        function emergencyStop() {
+            UIUtils.log('[E-STOP] Emergency stop activated!', 'error');
+            
+            // Stop execution
+            if (typeof ExecutionEngine !== 'undefined') {
+                ExecutionEngine.stop();
+            }
+            
+            // Stop all motors
+            if (typeof ROSBridge !== 'undefined') {
+                ROSBridge.stopAllMotors();
+                
+                // Turn off all relays
+                for (let relayId = 1; relayId <= 4; relayId++) {
+                    ROSBridge.publishRelayCommand(relayId, 'off');
+                }
+            }
+            
+            // If simulation is active, reset it
+            if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+                SimulationEngine.reset();
+            }
+            
+            UIUtils.log('[E-STOP] All systems stopped', 'error');
+        }
+        
+        // Toggle palette section collapse/expand
+        function togglePaletteSection(headerElement) {
+            const section = headerElement.closest('.palette-section');
+            const content = section.querySelector('.palette-section-content');
+            const isCollapsed = headerElement.classList.contains('collapsed');
+            
+            if (isCollapsed) {
+                headerElement.classList.remove('collapsed');
+                content.classList.remove('collapsed');
+            } else {
+                headerElement.classList.add('collapsed');
+                content.classList.add('collapsed');
+            }
         }
     </script>
 </body>

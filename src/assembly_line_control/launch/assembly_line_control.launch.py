@@ -70,6 +70,15 @@ def generate_launch_description():
         parameters=[],
     )
     
+    # Start the sensor controller that monitors sensors
+    sensor_controller_node = Node(
+        package='assembly_line_control',
+        executable='sensor_controller',
+        name='sensor_controller',
+        output='screen',
+        parameters=[],
+    )
+    
     return LaunchDescription([
         rosbridge_port_arg,
         web_port_arg,
@@ -77,5 +86,6 @@ def generate_launch_description():
         web_interface_node,
         motor_controller_node,
         relay_controller_node,
+        sensor_controller_node,
     ])
 

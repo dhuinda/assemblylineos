@@ -28,6 +28,7 @@ setup(
             'web_interface = assembly_line_control.web_interface:main',
             'motor_controller = assembly_line_control.motor_controller:main',
             'relay_controller = assembly_line_control.relay_controller:main',
+            'sensor_controller = assembly_line_control.sensor_controller:main',
         ],
     },
 )

@@ -14,6 +14,9 @@ const ExecutionEngine = {
     executionStartTime: null, // When execution started overall
     updateInterval: null, // Old way of updating (kept for compatibility)
     updateAnimationFrame: null, // New way of updating (using animation frames)
+    loopStack: [], // Stack of active loops: [{blockId, type, count, currentIteration, shouldBreak}]
+    errorStack: [], // Stack of active try blocks: [{blockId, catchBlockId, error}]
+    currentError: null, // Current error being handled
     
     /**
      * Start running all the workflows
@@ -24,8 +27,10 @@ const ExecutionEngine = {
             return;
         }
         
-        if (!ROSBridge.isConnected) {
-            UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+        // Check if we're in simulation mode or connected to ROS
+        const inSimulation = typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive;
+        if (!inSimulation && !ROSBridge.isConnected) {
+            UIUtils.log('[ERROR] Not connected to ROS Bridge and simulation mode is not active', 'error');
             return;
         }
         
@@ -37,6 +42,9 @@ const ExecutionEngine = {
         this.executingBlocks.clear();
         this.blockStartTimes.clear();
         this.executionStartTime = performance.now();
+        this.loopStack = [];
+        this.errorStack = [];
+        this.currentError = null;
         
         // Start updating the UI to show which blocks are running
         this.startActiveBlocksUpdates();
@@ -153,6 +161,17 @@ const ExecutionEngine = {
         const block = WorkflowManager.blocks.get(blockId);
         if (!block) return;
         
+        // Check if we're in a loop and this block is the loop block itself
+        // If so, we need to handle loop continuation differently
+        if (this.loopStack.length > 0) {
+            const currentLoop = this.loopStack[this.loopStack.length - 1];
+            if (blockId === currentLoop.blockId && (block.type === 'repeat' || block.type === 'forever')) {
+                // This is the loop block itself - don't execute it again, just continue the loop
+                // The loop execution is handled in executeBlock()
+                return;
+            }
+        }
+        
         // If everything is paused, wait here until we resume
         if (this.isPaused) {
             await new Promise(resolve => {
@@ -177,6 +196,19 @@ const ExecutionEngine = {
         
         // This block is done - check if any workflows were waiting for it
         this.triggerWorkflowCompleteEvents(blockId);
+        
+        // Check if we're in a loop and this block connects back to the loop
+        if (this.loopStack.length > 0) {
+            const currentLoop = this.loopStack[this.loopStack.length - 1];
+            const nextBlocks = BlockConnector.getNextBlocks(blockId);
+            const connectsBackToLoop = nextBlocks.includes(currentLoop.blockId);
+            
+            if (connectsBackToLoop && !currentLoop.shouldBreak) {
+                // This block connects back to the loop - don't continue to next blocks
+                // The loop will handle the next iteration
+                return;
+            }
+        }
         
         // Now run whatever blocks come next (all at the same time if there are multiple)
         const nextBlocks = BlockConnector.getNextBlocks(blockId);
@@ -247,6 +279,102 @@ const ExecutionEngine = {
                 }
                 
                 // Only process messages that arrive after this block started
+            } else if (block.type === 'repeat') {
+                // REPEAT loop: execute body N times
+                const count = block.count || 10;
+                UIUtils.log(`  → REPEAT: ${count} times`, 'success');
+                
+                // Push loop onto stack
+                const loopState = {
+                    blockId: blockId,
+                    type: 'repeat',
+                    count: count,
+                    currentIteration: 0,
+                    shouldBreak: false
+                };
+                this.loopStack.push(loopState);
+                
+                // Execute loop body
+                for (let i = 0; i < count; i++) {
+                    if (!this.isExecuting) break;
+                    if (loopState.shouldBreak) break;
+                    
+                    loopState.currentIteration = i + 1;
+                    UIUtils.log(`  → REPEAT iteration ${loopState.currentIteration}/${count}`, 'info');
+                    
+                    // Execute the body (blocks connected to this repeat block)
+                    const bodyBlocks = BlockConnector.getNextBlocks(blockId);
+                    if (bodyBlocks.length > 0) {
+                        // Execute body blocks and wait for them to complete
+                        // They may connect back to the loop block, which will be handled in executeBlockAndContinue
+                        await this.executeBlocksInParallel(bodyBlocks);
+                    }
+                    
+                    // Small delay between iterations to prevent tight loop
+                    await this.sleep(10);
+                }
+                
+                // Pop loop from stack
+                this.loopStack.pop();
+                UIUtils.log(`  → REPEAT completed`, 'success');
+            } else if (block.type === 'forever') {
+                // FOREVER loop: execute body until BREAK
+                UIUtils.log(`  → FOREVER: starting infinite loop`, 'success');
+                
+                // Push loop onto stack
+                const loopState = {
+                    blockId: blockId,
+                    type: 'forever',
+                    count: Infinity,
+                    currentIteration: 0,
+                    shouldBreak: false
+                };
+                this.loopStack.push(loopState);
+                
+                // Execute loop body until break
+                while (this.isExecuting && !loopState.shouldBreak) {
+                    loopState.currentIteration++;
+                    UIUtils.log(`  → FOREVER iteration ${loopState.currentIteration}`, 'info');
+                    
+                    // Execute the body (blocks connected to this forever block)
+                    const bodyBlocks = BlockConnector.getNextBlocks(blockId);
+                    if (bodyBlocks.length > 0) {
+                        // Execute body blocks - they will handle connecting back to loop
+                        await this.executeBlocksInParallel(bodyBlocks);
+                    }
+                    
+                    // Small delay to prevent tight loop
+                    await this.sleep(10);
+                }
+                
+                // Pop loop from stack
+                this.loopStack.pop();
+                UIUtils.log(`  → FOREVER completed`, 'success');
+            } else if (block.type === 'break') {
+                // BREAK: exit the current loop
+                if (this.loopStack.length > 0) {
+                    const currentLoop = this.loopStack[this.loopStack.length - 1];
+                    currentLoop.shouldBreak = true;
+                    UIUtils.log(`  → BREAK: exiting ${currentLoop.type} loop (was at iteration ${currentLoop.currentIteration})`, 'warning');
+                } else {
+                    UIUtils.log(`  → BREAK: no active loop to break`, 'warning');
+                }
+            } else if (block.type === 'ros-trigger') {
+                // Wait for a specific message from a ROS topic
+                const topic = block.topic || '/topic';
+                const expectedString = block.expectedString || '';
+                
+                if (!topic || topic.trim() === '') {
+                    UIUtils.log(`[ERROR] ROS trigger block ${blockId} missing topic name`, 'error');
+                    return;
+                }
+                
+                if (expectedString === '') {
+                    UIUtils.log(`[ERROR] ROS trigger block ${blockId} missing expected string`, 'error');
+                    return;
+                }
+                
+                // Only process messages that arrive after this block started
                 const blockStartTime = this.blockStartTimes.get(blockId) || Date.now();
                 
                 // Figure out what type of message this topic uses
@@ -263,6 +391,124 @@ const ExecutionEngine = {
                     UIUtils.log(`[ERROR] ROS trigger block ${blockId} error: ${error}`, 'error');
                     // Keep going even if there was an error - don't stop the whole workflow
                 }
+            } else if (block.type === 'wait-sensor') {
+                // Wait for sensor condition
+                const sensorId = block.sensorId || '';
+                const condition = block.condition || 'HIGH';
+                const threshold = block.threshold || 0.0;
+                const timeout = block.timeout || 0.0;
+                
+                if (!sensorId) {
+                    UIUtils.log(`[ERROR] Wait sensor block ${blockId} missing sensor ID`, 'error');
+                    return;
+                }
+                
+                UIUtils.log(`  → Block ${blockId}: Waiting for sensor ${sensorId} (${condition})...`, 'success');
+                
+                try {
+                    // Check if simulation mode is active
+                    if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+                        await SimulationEngine.waitForSensor(sensorId, condition, threshold, timeout * 1000);
+                        UIUtils.log(`  → Block ${blockId}: Sensor ${sensorId} condition met`, 'success');
+                    } else {
+                        // Use ROS Bridge to wait for sensor
+                        await ROSBridge.waitForSensor(sensorId, condition, threshold, timeout * 1000);
+                        UIUtils.log(`  → Block ${blockId}: Sensor ${sensorId} condition met`, 'success');
+                    }
+                } catch (error) {
+                    UIUtils.log(`[ERROR] Wait sensor block ${blockId} error: ${error}`, 'error');
+                    // Keep going even if there was an error - don't stop the whole workflow
+                }
+            } else if (block.type === 'read-sensor') {
+                // Read sensor value
+                const sensorId = block.sensorId || '';
+                
+                if (!sensorId) {
+                    UIUtils.log(`[ERROR] Read sensor block ${blockId} missing sensor ID`, 'error');
+                    return;
+                }
+                
+                try {
+                    let value = null;
+                    // Check if simulation mode is active
+                    if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+                        value = SimulationEngine.getSensorValue(sensorId);
+                    } else {
+                        value = ROSBridge.readSensor(sensorId);
+                    }
+                    
+                    if (value !== null) {
+                        UIUtils.log(`  → Block ${blockId}: Sensor ${sensorId} value: ${value}`, 'success');
+                    } else {
+                        UIUtils.log(`[WARNING] Sensor ${sensorId} not found or not connected`, 'warning');
+                    }
+                } catch (error) {
+                    UIUtils.log(`[ERROR] Read sensor block ${blockId} error: ${error}`, 'error');
+                }
+            } else if (block.type === 'try') {
+                // TRY block: start error handling scope
+                UIUtils.log(`  → TRY: starting error handling scope`, 'success');
+                
+                // Find the associated CATCH block
+                const nextBlocks = BlockConnector.getNextBlocks(blockId);
+                let catchBlockId = null;
+                
+                // Look for CATCH block in the next blocks
+                for (const nextId of nextBlocks) {
+                    const nextBlock = WorkflowManager.blocks.get(nextId);
+                    if (nextBlock && nextBlock.type === 'catch') {
+                        catchBlockId = nextId;
+                        break;
+                    }
+                }
+                
+                // Push try block onto error stack
+                const tryState = {
+                    blockId: blockId,
+                    catchBlockId: catchBlockId,
+                    error: null
+                };
+                this.errorStack.push(tryState);
+                
+                // Execute the try body (blocks connected to TRY, but not the CATCH)
+                const tryBodyBlocks = nextBlocks.filter(id => id !== catchBlockId);
+                if (tryBodyBlocks.length > 0) {
+                    try {
+                        await this.executeBlocksInParallel(tryBodyBlocks);
+                    } catch (error) {
+                        // Error occurred - set error state
+                        tryState.error = error;
+                        this.currentError = error;
+                        UIUtils.log(`  → TRY: error caught: ${error.message || error}`, 'error');
+                        
+                        // Execute CATCH block if it exists
+                        if (catchBlockId) {
+                            const catchBodyBlocks = BlockConnector.getNextBlocks(catchBlockId);
+                            if (catchBodyBlocks.length > 0) {
+                                await this.executeBlocksInParallel(catchBodyBlocks);
+                            }
+                        }
+                    }
+                }
+                
+                // Pop try block from error stack
+                this.errorStack.pop();
+                if (this.errorStack.length === 0) {
+                    this.currentError = null;
+                }
+                
+                UIUtils.log(`  → TRY: error handling scope completed`, 'success');
+            } else if (block.type === 'catch') {
+                // CATCH block: this is handled by the TRY block
+                // Just log that we're in the catch handler
+                UIUtils.log(`  → CATCH: error handler`, 'warning');
+            } else if (block.type === 'throw-error') {
+                // THROW ERROR: manually trigger an error
+                const errorMessage = block.errorMessage || 'Error thrown';
+                UIUtils.log(`  → THROW ERROR: ${errorMessage}`, 'error');
+                
+                // Throw error to be caught by nearest TRY block
+                throw new Error(errorMessage);
             } else if (block.type === 'event') {
                 // Event blocks don't do anything themselves - they just start workflows
                 UIUtils.log(`  → Event: ${block.eventType || 'unknown'}`, 'success');

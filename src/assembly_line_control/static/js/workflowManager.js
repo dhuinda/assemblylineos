@@ -51,6 +51,17 @@ const WorkflowManager = {
     },
     
     /**
+     * Snap a position to the center of the nearest grid cell
+     * @param {number} coord - The coordinate to snap
+     * @returns {number} - The snapped coordinate (center of grid cell)
+     */
+    snapToGridCenter(coord) {
+        // Snap to grid boundary first, then add half grid size to get center
+        const gridBoundary = Math.round(coord / this.gridSize) * this.gridSize;
+        return gridBoundary + this.gridSize / 2;
+    },
+    
+    /**
      * Get the DOM element for a block, using cache if possible
      * @param {number} blockId - Which block we want
      * @returns {HTMLElement|null} - The block's element, or null if not found
@@ -358,11 +369,15 @@ const WorkflowManager = {
                 templateBlock = this.blockPalette.querySelector(
                     `[data-type="relay"][data-relay-id="${data.relayId}"]`
                 );
-            } else if (data.type === 'pause' || data.type === 'delay' || data.type === 'ros-trigger') {
+            } else {
+                // Handle all other block types (pause, delay, ros-trigger, repeat, forever, break, wait-sensor, read-sensor, try, catch, throw-error)
                 templateBlock = this.blockPalette.querySelector(`[data-type="${data.type}"]`);
             }
             
-            if (!templateBlock) return;
+            if (!templateBlock) {
+                UIUtils.log(`[WORKFLOW] Template block not found for type: ${data.type}`, 'error');
+                return;
+            }
             
             // Extract block data
             const blockData = BlockSystem.extractBlockData(templateBlock);

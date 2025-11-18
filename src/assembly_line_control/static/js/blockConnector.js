@@ -883,15 +883,19 @@ const BlockConnector = {
      */
     calculateRightAnglePath(fromX, fromY, toX, toY, gridSize = 20) {
         const segments = [];
+        
+        // Don't snap connector positions - they're already at block centers which are grid-aligned
+        // Only snap waypoints/turn points to grid cell centers
         const dx = toX - fromX;
         const dy = toY - fromY;
         
         // If blocks are vertically aligned (same X), go straight
-        if (Math.abs(dx) < 5) {
+        if (Math.abs(dx) < gridSize / 2) {
+            const startY = Math.min(fromY, toY);
             const height = Math.abs(dy);
             segments.push({
                 x: fromX - 1, // Center the 2px line
-                y: Math.min(fromY, toY),
+                y: startY,
                 width: 2,
                 height: height
             });
@@ -899,25 +903,27 @@ const BlockConnector = {
         }
         
         // Calculate a good intermediate Y position for the horizontal turn
-        // Use the midpoint, snapped to grid for cleaner look
-        const midY = WorkflowManager.snapToGrid((fromY + toY) / 2);
+        // Use the midpoint, snapped to grid cell center for cleaner look
+        const midY = WorkflowManager.snapToGridCenter((fromY + toY) / 2);
         
-        // Ensure we have enough vertical space for the turn
-        const minVerticalSpace = 40; // Minimum space needed for a clean turn
+        // Ensure we have enough vertical space for the turn (at least 2 grid cells)
+        const minVerticalSpace = gridSize * 2; // 40px = 2 grid cells
         let turnY = midY;
         
         // If blocks are too close vertically, adjust the turn point
         if (Math.abs(dy) < minVerticalSpace) {
             // If going down, place turn below source
             if (dy > 0) {
-                turnY = WorkflowManager.snapToGrid(fromY + minVerticalSpace / 2);
+                turnY = WorkflowManager.snapToGridCenter(fromY + minVerticalSpace / 2);
             } else {
                 // If going up, place turn above source
-                turnY = WorkflowManager.snapToGrid(fromY - minVerticalSpace / 2);
+                turnY = WorkflowManager.snapToGridCenter(fromY - minVerticalSpace / 2);
             }
         }
         
         // Create L-shaped path: down/up, then right/left, then up/down
+        // Connector positions (fromX, fromY, toX, toY) are not snapped - they're already at block centers
+        // Only waypoints (turnY) are snapped to grid cell centers
         if (dy >= 0) {
             // Going down from source (most common case)
             
@@ -933,10 +939,12 @@ const BlockConnector = {
             }
             
             // Horizontal segment: connect horizontally between blocks
-            const horizontalWidth = Math.abs(dx);
-            const horizontalX = Math.min(fromX, toX);
+            // Use actual connector X positions, not snapped
+            const horizontalStartX = Math.min(fromX, toX);
+            const horizontalEndX = Math.max(fromX, toX);
+            const horizontalWidth = horizontalEndX - horizontalStartX;
             segments.push({
-                x: horizontalX,
+                x: horizontalStartX,
                 y: turnY - 1, // Center the 2px line
                 width: horizontalWidth,
                 height: 2
@@ -975,10 +983,12 @@ const BlockConnector = {
             }
             
             // Horizontal segment: connect horizontally between blocks
-            const horizontalWidth = Math.abs(dx);
-            const horizontalX = Math.min(fromX, toX);
+            // Use actual connector X positions, not snapped
+            const horizontalStartX = Math.min(fromX, toX);
+            const horizontalEndX = Math.max(fromX, toX);
+            const horizontalWidth = horizontalEndX - horizontalStartX;
             segments.push({
-                x: horizontalX,
+                x: horizontalStartX,
                 y: turnY - 1, // Center the 2px line
                 width: horizontalWidth,
                 height: 2

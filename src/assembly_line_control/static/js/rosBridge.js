@@ -195,6 +195,11 @@ const ROSBridge = {
      * @returns {Object|null} - Motor status or null
      */
     getMotorStatus(motorId) {
+        // Check if simulation mode is active
+        if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+            return SimulationEngine.getMotorStatus(motorId);
+        }
+        
         return this.motorStatus[motorId] || null;
     },
     
@@ -205,6 +210,11 @@ const ROSBridge = {
      * @returns {boolean} - Success status
      */
     publishMotorCommand(motorId, steps) {
+        // Check if simulation mode is active
+        if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+            return SimulationEngine.simulateMotorCommand(motorId, steps);
+        }
+        
         if (!this.isConnected) {
             UIUtils.log('[ROS] Not connected, cannot publish motor command', 'error');
             return false;
@@ -233,6 +243,15 @@ const ROSBridge = {
      * Stop all motors by sending them 0 steps
      */
     stopAllMotors() {
+        // Check if simulation mode is active
+        if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+            for (let motorId = 1; motorId <= 2; motorId++) {
+                SimulationEngine.simulateMotorCommand(motorId, 0);
+            }
+            UIUtils.log('[PAUSE] All motors stopped (simulation)', 'warning');
+            return;
+        }
+        
         if (!this.isConnected) {
             UIUtils.log('[ROS] Not connected, cannot stop motors', 'error');
             return;
@@ -252,6 +271,11 @@ const ROSBridge = {
      * @returns {boolean} - Success status
      */
     publishRelayCommand(relayId, state) {
+        // Check if simulation mode is active
+        if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+            return SimulationEngine.simulateRelayCommand(relayId, state);
+        }
+        
         if (!this.isConnected) {
             UIUtils.log('[ROS] Not connected, cannot publish relay command', 'error');
             return false;
@@ -631,6 +655,133 @@ const ROSBridge = {
             messageRate: this.connectionQuality.messageRate,
             isHealthy: this.connectionQuality.latency < 100 && this.connectionQuality.messageRate > 5
         };
+    },
+    
+    /**
+     * Sensor states cache
+     */
+    sensorStates: new Map(),
+    
+    /**
+     * Wait for sensor condition
+     * @param {string} sensorId - Sensor ID
+     * @param {string} condition - Condition: 'HIGH', 'LOW', '>', '<', '==', '!='
+     * @param {number} threshold - Threshold value (for analog sensors)
+     * @param {number} timeout - Timeout in milliseconds (0 = no timeout)
+     * @returns {Promise<boolean>} - Resolves when condition is met or timeout
+     */
+    waitForSensor(sensorId, condition, threshold = 0, timeout = 0) {
+        return new Promise((resolve, reject) => {
+            if (!this.isConnected) {
+                reject(new Error('Not connected to ROS Bridge'));
+                return;
+            }
+            
+            const startTime = performance.now();
+            const checkInterval = 100; // Check every 100ms
+            
+            const checkCondition = () => {
+                const sensor = this.sensorStates.get(sensorId);
+                
+                if (!sensor) {
+                    // Sensor not found - check timeout
+                    if (timeout > 0 && (performance.now() - startTime) >= timeout) {
+                        clearInterval(intervalId);
+                        reject(new Error(`Sensor ${sensorId} timeout after ${timeout}ms`));
+                        return;
+                    }
+                    return; // Continue waiting
+                }
+                
+                const value = sensor.value;
+                let conditionMet = false;
+                
+                if (sensor.type === 'digital') {
+                    // Digital sensor conditions
+                    if (condition === 'HIGH' && value === true) {
+                        conditionMet = true;
+                    } else if (condition === 'LOW' && value === false) {
+                        conditionMet = true;
+                    }
+                } else {
+                    // Analog sensor conditions
+                    switch (condition) {
+                        case '>':
+                            conditionMet = value > threshold;
+                            break;
+                        case '<':
+                            conditionMet = value < threshold;
+                            break;
+                        case '==':
+                            conditionMet = Math.abs(value - threshold) < 0.01;
+                            break;
+                        case '!=':
+                            conditionMet = Math.abs(value - threshold) >= 0.01;
+                            break;
+                    }
+                }
+                
+                if (conditionMet) {
+                    clearInterval(intervalId);
+                    if (timeoutId) clearTimeout(timeoutId);
+                    resolve(true);
+                    return;
+                }
+                
+                // Check timeout
+                if (timeout > 0 && (performance.now() - startTime) >= timeout) {
+                    clearInterval(intervalId);
+                    if (timeoutId) clearTimeout(timeoutId);
+                    reject(new Error(`Sensor ${sensorId} timeout after ${timeout}ms`));
+                    return;
+                }
+            };
+            
+            // Subscribe to sensor status if not already subscribed
+            if (!this.sensorStatusSub) {
+                this.sensorStatusSub = new ROSLIB.Topic({
+                    ros: this.ros,
+                    name: '/sensor/status',
+                    messageType: 'std_msgs/String'
+                });
+                
+                this.sensorStatusSub.subscribe((msg) => {
+                    try {
+                        const status = this.safeJsonParse(msg.data, '/sensor/status');
+                        if (status && status.sensor_id) {
+                            this.sensorStates.set(status.sensor_id, status);
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse sensor status:', e);
+                    }
+                });
+            }
+            
+            // Check immediately
+            checkCondition();
+            
+            // Set up interval
+            const intervalId = setInterval(checkCondition, checkInterval);
+            
+            // Set up timeout if specified
+            let timeoutId = null;
+            if (timeout > 0) {
+                timeoutId = setTimeout(() => {
+                    clearInterval(intervalId);
+                    reject(new Error(`Sensor ${sensorId} timeout after ${timeout}ms`));
+                }, timeout);
+            }
+        });
+    },
+    
+    /**
+     * Read sensor value
+     * @param {string} sensorId - Sensor ID
+     * @returns {boolean|number|null} - Sensor value or null if not found
+     */
+    readSensor(sensorId) {
+        const sensor = this.sensorStates.get(sensorId);
+        return sensor ? sensor.value : null;
     }
 };
 

@@ -21,9 +21,14 @@ const BlockRenderer = {
         block.dataset.type = blockData.type;
         block.dataset.blockId = blockData.id;
         
-        // Calculate width
+        // Calculate width and height (always odd multiples of grid size)
         const width = BlockSystem.calculateBlockWidth(blockData);
+        const height = BlockSystem.calculateBlockHeight(blockData);
         block.style.width = width + 'px';
+        block.style.height = height + 'px';
+        block.style.minHeight = height + 'px';
+        // Allow slight overflow if needed, but prefer calculated height
+        block.style.overflow = 'visible';
         
         // Block content
         block.innerHTML = this.generateScratchBlockContent(blockData);
@@ -227,6 +232,133 @@ const BlockRenderer = {
                     </div>
                     <input type="number" step="0.1" class="w-full px-1 py-0.5 text-xs text-white accent-delay" 
                            placeholder="duration (s)" data-param="duration" value="${blockData.duration || 1.0}"
+                           onclick="event.stopPropagation()"
+                           style="max-width: 100%;">
+                </div>
+            `;
+        } else if (blockData.type === 'repeat') {
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-loop text-xs">REPEAT</div>
+                    </div>
+                    <input type="number" class="w-full px-1 py-0.5 text-xs text-white accent-loop" 
+                           placeholder="times" data-param="count" value="${blockData.count || 10}" min="1"
+                           onclick="event.stopPropagation()"
+                           style="max-width: 100%;">
+                </div>
+            `;
+        } else if (blockData.type === 'forever') {
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-loop text-xs">FOREVER</div>
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'break') {
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-loop text-xs">BREAK</div>
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'wait-sensor') {
+            const sensorId = blockData.sensorId || '';
+            const condition = blockData.condition || 'HIGH';
+            const threshold = blockData.threshold || 0.0;
+            const timeout = blockData.timeout || 0.0;
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-sensor text-xs">WAIT FOR SENSOR</div>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Sensor:</label>
+                        <input type="text" class="w-full px-1 py-0.5 text-xs text-white accent-sensor" 
+                               placeholder="sensor_id" data-param="sensorId" value="${sensorId}"
+                               onclick="event.stopPropagation()"
+                               style="max-width: 100%;">
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Condition:</label>
+                        <select class="w-full px-1 py-0.5 text-xs text-white accent-sensor" 
+                                data-param="condition"
+                                onclick="event.stopPropagation()"
+                                style="max-width: 100%;">
+                            <option value="HIGH" ${condition === 'HIGH' ? 'selected' : ''}>HIGH</option>
+                            <option value="LOW" ${condition === 'LOW' ? 'selected' : ''}>LOW</option>
+                            <option value=">" ${condition === '>' ? 'selected' : ''}>Greater than</option>
+                            <option value="<" ${condition === '<' ? 'selected' : ''}>Less than</option>
+                            <option value="==" ${condition === '==' ? 'selected' : ''}>Equal to</option>
+                        </select>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Threshold:</label>
+                        <input type="number" step="0.1" class="w-full px-1 py-0.5 text-xs text-white accent-sensor" 
+                               placeholder="0.0" data-param="threshold" value="${threshold}"
+                               onclick="event.stopPropagation()"
+                               style="max-width: 100%;">
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Timeout (s):</label>
+                        <input type="number" step="0.1" class="w-full px-1 py-0.5 text-xs text-white accent-sensor" 
+                               placeholder="0 = no timeout" data-param="timeout" value="${timeout}" min="0"
+                               onclick="event.stopPropagation()"
+                               style="max-width: 100%;">
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'read-sensor') {
+            const sensorId = blockData.sensorId || '';
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-sensor text-xs">READ SENSOR</div>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Sensor:</label>
+                        <input type="text" class="w-full px-1 py-0.5 text-xs text-white accent-sensor" 
+                               placeholder="sensor_id" data-param="sensorId" value="${sensorId}"
+                               onclick="event.stopPropagation()"
+                               style="max-width: 100%;">
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'try') {
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-error text-xs">TRY</div>
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'catch') {
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-error text-xs">CATCH</div>
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'throw-error') {
+            const errorMessage = blockData.errorMessage || '';
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-error text-xs">THROW ERROR</div>
+                    </div>
+                    <input type="text" class="w-full px-1 py-0.5 text-xs text-white accent-error" 
+                           placeholder="error message" data-param="errorMessage" value="${errorMessage}"
                            onclick="event.stopPropagation()"
                            style="max-width: 100%;">
                 </div>
