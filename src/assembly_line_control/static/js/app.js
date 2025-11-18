@@ -18,6 +18,9 @@ const App = {
         // Load any saved workflows
         WorkflowManager.initialize();
         
+        // Load workspace from storage (current workspace or default)
+        StorageManager.loadFromStorage();
+        
         // Make sure the pause overlay is hidden when we start
         UIUtils.showPauseOverlay(false);
         

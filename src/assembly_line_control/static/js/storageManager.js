@@ -408,7 +408,7 @@ const StorageManager = {
         try {
             const currentName = this.getCurrentWorkspace();
             if (currentName) {
-                // Try to load current workspace
+                // Try to load last used workspace
                 const saved = localStorage.getItem(`${Config.WORKSPACES_KEY}_${currentName}`);
                 if (saved) {
                     // Load without confirmation on page load
@@ -417,11 +417,25 @@ const StorageManager = {
                 }
             }
             
-            // Fallback: try to load default workspace
-            const defaultSaved = localStorage.getItem(`${Config.WORKSPACES_KEY}_default`);
-            if (defaultSaved) {
-                this.setCurrentWorkspace('default');
-                this.load('default', false);
+            // Fallback: load any available workspace
+            const workspaces = this.getAllWorkspaces();
+            const workspaceNames = Object.keys(workspaces);
+            
+            if (workspaceNames.length > 0) {
+                // Sort by timestamp (most recent first) or alphabetically if no timestamp
+                const sortedNames = workspaceNames.sort((a, b) => {
+                    const aTime = workspaces[a]?.timestamp || '';
+                    const bTime = workspaces[b]?.timestamp || '';
+                    if (aTime && bTime) {
+                        return new Date(bTime) - new Date(aTime);
+                    }
+                    return a.localeCompare(b);
+                });
+                
+                // Load the first available workspace
+                const workspaceToLoad = sortedNames[0];
+                this.setCurrentWorkspace(workspaceToLoad);
+                this.load(workspaceToLoad, false);
             } else {
                 // No workspace found, start fresh
                 WorkflowManager.blocks.clear();
