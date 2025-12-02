@@ -89,8 +89,12 @@ if [ -d .git ]; then
     fi
 fi
 
-# Build the workspace
-colcon build --symlink-install
+# Ensure install, build, and log directories exist and have correct permissions
+mkdir -p {workspace_str}/install {workspace_str}/build {workspace_str}/log
+chmod -R u+w {workspace_str}/install {workspace_str}/build {workspace_str}/log 2>/dev/null || true
+
+# Build the workspace (without symlinks to avoid permission issues)
+colcon build
 
 # Source the workspace setup (if it exists)
 if [ -f {workspace_str}/install/setup.bash ]; then
@@ -254,8 +258,7 @@ def main():
     
     if not (workspace_path / 'install' / 'setup.bash').exists():
         print("⚠ Warning: install/setup.bash not found")
-        print("  Make sure you've built the workspace with:")
-        print("    colcon build --symlink-install")
+        print("  The service will build the workspace on first start.")
         print()
     
     # Create startup script
@@ -270,6 +273,13 @@ def main():
         try:
             user_info = pwd.getpwnam(user)
             os.chown(script_path, user_info.pw_uid, user_info.pw_gid)
+            # Also fix ownership of install/build/log directories if they exist
+            for dir_name in ['install', 'build', 'log']:
+                dir_path = workspace_path / dir_name
+                if dir_path.exists():
+                    # Use subprocess to change ownership recursively (more reliable)
+                    subprocess.run(['chown', '-R', f'{user}:{user}', str(dir_path)], 
+                                 capture_output=True, check=False)
         except (KeyError, AttributeError):
             # If user lookup fails, continue anyway
             pass
