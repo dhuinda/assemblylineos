@@ -45,31 +45,29 @@ def get_ros_distro():
     return 'humble'
 
 
-def setup_environment():
-    """Set up environment variables for colcon and ROS."""
-    home = os.environ.get('HOME')
-    if not home:
-        print("Error: HOME environment variable not set")
-        sys.exit(1)
+def setup_environment(workspace_path):
+    """Set up environment variables for colcon and ROS.
     
-    # Set environment variables for colcon
-    os.environ['COLCON_HOME'] = f'{home}/.colcon'
-    os.environ.setdefault('XDG_CONFIG_HOME', f'{home}/.config')
-    os.environ.setdefault('XDG_CACHE_HOME', f'{home}/.cache')
-    os.environ.setdefault('XDG_DATA_HOME', f'{home}/.local/share')
-    
-    # Ensure .colcon directory exists with proper permissions
-    colcon_home = Path(home) / '.colcon'
+    Uses workspace-local directories to keep everything self-contained.
+    """
+    # Use workspace-local directory for colcon config (self-contained)
+    colcon_home = workspace_path / '.colcon'
     colcon_mixin = colcon_home / 'mixin'
     colcon_log = colcon_home / 'log'
     
+    # Set COLCON_HOME to workspace-local directory
+    os.environ['COLCON_HOME'] = str(colcon_home)
+    
+    # Create colcon directories in workspace (self-contained, no home directory needed)
+    print(f"Setting up workspace-local colcon directory at {colcon_home}")
     for colcon_dir in [colcon_home, colcon_mixin, colcon_log]:
-        colcon_dir.mkdir(parents=True, exist_ok=True)
-        # Set permissions
         try:
+            colcon_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(colcon_dir, 0o755)
-        except Exception:
-            pass  # Ignore permission errors if we can't set them
+        except Exception as e:
+            print(f"⚠ Warning: Could not create {colcon_dir}: {e}")
+    
+    print(f"✓ Environment setup complete (COLCON_HOME={colcon_home})")
 
 
 def git_pull(workspace_path):
@@ -126,19 +124,32 @@ def colcon_build(workspace_path, ros_distro):
 
 
 def run_command_with_ros(ros_distro, workspace_path, command, check=True):
-    """Run a command with ROS environment sourced."""
+    """Run a command with ROS environment sourced.
+    
+    Uses workspace-local COLCON_HOME to keep everything self-contained.
+    """
     ros_setup = Path(f'/opt/ros/{ros_distro}/setup.bash')
     workspace_setup = workspace_path / 'install' / 'setup.bash'
     
+    # Use workspace-local colcon directory (self-contained)
+    colcon_home = workspace_path / '.colcon'
+    
     # Build bash command that sources ROS and workspace setup
-    bash_cmd = f'source {ros_setup}'
+    # Export COLCON_HOME to workspace-local directory
+    bash_cmd = f'export COLCON_HOME="{colcon_home}" && '
+    bash_cmd += f'source {ros_setup}'
     if workspace_setup.exists():
         bash_cmd += f' && source {workspace_setup}'
     bash_cmd += f' && cd {workspace_path} && {command}'
     
+    # Pass the current environment to the subprocess
+    env = os.environ.copy()
+    env['COLCON_HOME'] = str(colcon_home)
+    
     return subprocess.run(
         ['bash', '-c', bash_cmd],
-        check=check
+        check=check,
+        env=env
     )
 
 
@@ -152,12 +163,20 @@ def launch_application(workspace_path, ros_distro):
         ros_setup = Path(f'/opt/ros/{ros_distro}/setup.bash')
         workspace_setup = workspace_path / 'install' / 'setup.bash'
         
-        bash_cmd = f'source {ros_setup}'
+        # Use workspace-local colcon directory (self-contained)
+        colcon_home = workspace_path / '.colcon'
+        
+        bash_cmd = f'export COLCON_HOME="{colcon_home}" && '
+        bash_cmd += f'source {ros_setup}'
         if workspace_setup.exists():
             bash_cmd += f' && source {workspace_setup}'
         bash_cmd += f' && cd {workspace_path} && exec ros2 launch assembly_line_control assembly_line_control.launch.py'
         
-        os.execv('/bin/bash', ['bash', '-c', bash_cmd])
+        # Set environment for the exec
+        env = os.environ.copy()
+        env['COLCON_HOME'] = str(colcon_home)
+        
+        os.execve('/bin/bash', ['bash', '-c', bash_cmd], env)
     except FileNotFoundError:
         print("Error: ros2 command not found. Is ROS 2 properly sourced?")
         sys.exit(1)
@@ -173,6 +192,12 @@ def main():
     print("=" * 60)
     print()
     
+    # Log current user info (for debugging)
+    current_user = os.environ.get('USER', 'unknown')
+    current_uid = os.geteuid()
+    
+    print(f"Running as user: {current_user} (UID: {current_uid})")
+    
     # Get workspace path
     workspace_path = get_workspace_path()
     print(f"Workspace: {workspace_path}")
@@ -180,8 +205,8 @@ def main():
     # Change to workspace directory
     os.chdir(workspace_path)
     
-    # Setup environment
-    setup_environment()
+    # Setup environment (workspace-local, self-contained)
+    setup_environment(workspace_path)
     
     # Detect ROS distribution
     ros_distro = get_ros_distro()

@@ -50,8 +50,46 @@ def get_ros_distro():
 
 def get_user_info():
     """Get current user and home directory."""
-    user = os.environ.get('SUDO_USER') or os.environ.get('USER') or 'root'
-    home = os.environ.get('HOME') or f'/home/{user}'
+    # When running with sudo, SUDO_USER contains the original user
+    # If not set, try to get the actual user from the environment
+    user = os.environ.get('SUDO_USER')
+    
+    if not user:
+        # Try to get user from whoami command (more reliable)
+        try:
+            result = subprocess.run(['whoami'], capture_output=True, text=True, check=True)
+            current_user = result.stdout.strip()
+            # If we're root, try to find a non-root user
+            if current_user == 'root':
+                # Try to get the original user from the parent process
+                # or check common user directories
+                import pwd
+                # Get the first non-root user with a home directory
+                for p in pwd.getpwall():
+                    if p.pw_uid >= 1000 and p.pw_dir and Path(p.pw_dir).exists():
+                        user = p.pw_name
+                        break
+            else:
+                user = current_user
+        except Exception:
+            # Fallback to environment variable
+            user = os.environ.get('USER', 'root')
+    
+    if not user or user == 'root':
+        print("⚠ Warning: Could not determine non-root user.")
+        print("  The service will run as root, which may cause permission issues.")
+        print("  Consider specifying a user with: sudo -u <username> python3 setup_service.py")
+        user = 'root'
+    
+    # Get home directory for the user
+    try:
+        import pwd
+        user_info = pwd.getpwnam(user)
+        home = user_info.pw_dir
+    except KeyError:
+        # User doesn't exist, use default
+        home = f'/home/{user}' if user != 'root' else '/root'
+    
     return user, home
 
 
@@ -96,13 +134,10 @@ User={user}
 Group={user}
 WorkingDirectory={workspace_str}
 
-# Environment variables - CRITICAL for colcon to use correct directories
+# Environment variables
+# Note: COLCON_HOME will be set by run_service.py to workspace/.colcon (self-contained)
 Environment="HOME={home}"
 Environment="USER={user}"
-Environment="COLCON_HOME={home}/.colcon"
-Environment="XDG_CONFIG_HOME={home}/.config"
-Environment="XDG_CACHE_HOME={home}/.cache"
-Environment="XDG_DATA_HOME={home}/.local/share"
 
 ExecStart=/usr/bin/env python3 {script_path}
 
@@ -319,26 +354,8 @@ def main():
                 subprocess.run(['chown', '-R', f'{user}:{user}', str(dir_path)], 
                              capture_output=True, check=False)
         
-        # Create .colcon directory structure with proper permissions
-        # This prevents the "permission denied root/.colcon/mixin" error
-        colcon_home = Path(home) / '.colcon'
-        colcon_mixin = colcon_home / 'mixin'
-        colcon_log = colcon_home / 'log'
-        
-        # Create directories if they don't exist
-        for colcon_dir in [colcon_home, colcon_mixin, colcon_log]:
-            if not colcon_dir.exists():
-                colcon_dir.mkdir(parents=True, exist_ok=True)
-                os.chown(colcon_dir, user_info.pw_uid, user_info.pw_gid)
-            else:
-                # Fix ownership if it exists but has wrong permissions
-                subprocess.run(['chown', '-R', f'{user}:{user}', str(colcon_home)], 
-                             capture_output=True, check=False)
-        
-        # Set proper permissions
-        subprocess.run(['chmod', '-R', 'u+rw', str(colcon_home)], 
-                     capture_output=True, check=False)
-        print("✓ Created/fixed .colcon directory with proper permissions")
+        # Note: .colcon directory will be created workspace-locally by run_service.py
+        # No need to create it in user's home directory - workspace is self-contained
     except (KeyError, AttributeError):
         # If user lookup fails, continue anyway
         pass
