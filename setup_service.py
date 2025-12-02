@@ -55,7 +55,7 @@ def get_user_info():
     return user, home
 
 
-def create_startup_script(workspace_path, ros_distro):
+def create_startup_script(workspace_path, ros_distro, home):
     """Create the startup script that handles git pull, build, and launch."""
     workspace_str = str(workspace_path)
     script_path = workspace_path / 'start_service.sh'
@@ -65,6 +65,15 @@ def create_startup_script(workspace_path, ros_distro):
 # This script sources ROS, pulls updates, builds, and launches the app
 
 set -e
+
+# Ensure HOME and related environment variables are set correctly (colcon needs these)
+export HOME={home}
+export USER="${{USER:-$(whoami)}}"
+export XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
+export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-$HOME/.cache}}"
+
+# Ensure colcon directories exist with proper permissions
+mkdir -p "$HOME/.colcon" 2>/dev/null || true
 
 # Source ROS setup
 source /opt/ros/{ros_distro}/setup.bash
@@ -250,7 +259,7 @@ def main():
         print()
     
     # Create startup script
-    script_path, script_content = create_startup_script(workspace_path, ros_distro)
+    script_path, script_content = create_startup_script(workspace_path, ros_distro, home)
     print(f"Creating startup script: {script_path}")
     try:
         script_path.write_text(script_content)
