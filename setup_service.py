@@ -180,6 +180,72 @@ def start_service(service_name):
         return False
 
 
+def stop_service(service_name):
+    """Stop the service if it's running."""
+    try:
+        # Check if service is active
+        result = subprocess.run(
+            ['systemctl', 'is-active', service_name],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            print(f"Stopping service {service_name}...")
+            subprocess.run(['systemctl', 'stop', service_name], 
+                         check=False, capture_output=True)
+            print("✓ Service stopped")
+            return True
+        else:
+            print("Service is not running")
+            return True
+    except Exception as e:
+        print(f"⚠ Warning: Could not stop service: {e}")
+        return False
+
+
+def disable_service(service_name):
+    """Disable the service if it's enabled."""
+    try:
+        # Check if service is enabled
+        result = subprocess.run(
+            ['systemctl', 'is-enabled', service_name],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            print(f"Disabling service {service_name}...")
+            subprocess.run(['systemctl', 'disable', service_name], 
+                         check=False, capture_output=True)
+            print("✓ Service disabled")
+            return True
+        else:
+            print("Service is not enabled")
+            return True
+    except Exception as e:
+        print(f"⚠ Warning: Could not disable service: {e}")
+        return False
+
+
+def remove_old_service_file(service_name):
+    """Remove the old service file if it exists."""
+    service_path = Path(f'/etc/systemd/system/{service_name}')
+    
+    if service_path.exists():
+        print(f"Removing old service file: {service_path}")
+        try:
+            service_path.unlink()
+            print("✓ Old service file removed")
+            return True
+        except Exception as e:
+            print(f"⚠ Warning: Could not remove old service file: {e}")
+            return False
+    else:
+        print("No existing service file found")
+        return True
+
+
 def check_root():
     """Check if running as root (required for systemd operations)."""
     if os.geteuid() != 0:
@@ -277,8 +343,29 @@ def main():
         # If user lookup fails, continue anyway
         pass
     
-    # Create service file
+    # Get service name
     service_content, service_name = create_service_file(workspace_path, ros_distro, user, home)
+    
+    # Reinstall the service cleanly
+    print()
+    print("Reinstalling service...")
+    print("-" * 60)
+    
+    # Stop the service if it's running
+    stop_service(service_name)
+    
+    # Disable the service if it's enabled
+    disable_service(service_name)
+    
+    # Remove old service file
+    remove_old_service_file(service_name)
+    
+    # Reload systemd to ensure old service is gone
+    subprocess.run(['systemctl', 'daemon-reload'], check=False, capture_output=True)
+    
+    print()
+    print("Installing new service...")
+    print("-" * 60)
     
     # Install service
     if not install_service(service_content, service_name):
