@@ -55,28 +55,51 @@ def get_user_info():
     return user, home
 
 
+def create_startup_script(workspace_path, ros_distro):
+    """Create the startup script that handles git pull, build, and launch."""
+    workspace_str = str(workspace_path)
+    script_path = workspace_path / 'start_service.sh'
+    
+    script_content = f"""#!/bin/bash
+# Startup script for Assembly Line Control service
+# This script sources ROS, pulls updates, builds, and launches the app
+
+set -e
+
+# Source ROS setup
+source /opt/ros/{ros_distro}/setup.bash
+
+# Change to workspace directory
+cd {workspace_str}
+
+# Try git pull if possible (only if working tree is clean)
+if [ -d .git ]; then
+    git fetch || true
+    if [ -z "$(git status --porcelain)" ]; then
+        git pull || true
+    fi
+fi
+
+# Build the workspace
+colcon build --symlink-install
+
+# Source the workspace setup (if it exists)
+if [ -f {workspace_str}/install/setup.bash ]; then
+    source {workspace_str}/install/setup.bash
+fi
+
+# Launch the application
+exec ros2 launch assembly_line_control assembly_line_control.launch.py
+"""
+    
+    return script_path, script_content
+
+
 def create_service_file(workspace_path, ros_distro, user, home):
     """Create the systemd service file content."""
     workspace_str = str(workspace_path)
     service_name = 'assembly-line-control.service'
-    
-    # Build the ExecStart command
-    # Source ROS, try git pull, build, source workspace, then launch
-    exec_start_parts = [
-        f'source /opt/ros/{ros_distro}/setup.bash',
-        f'cd {workspace_str}',
-        # Try git pull if possible (only if working tree is clean)
-        'if [ -d .git ]; then git fetch && if [ -z "$(git status --porcelain)" ]; then git pull || true; fi; fi',
-        # Build the workspace
-        f'colcon build --symlink-install',
-        # Source the workspace setup
-        f'source {workspace_str}/install/setup.bash',
-        # Launch the application
-        'ros2 launch assembly_line_control assembly_line_control.launch.py'
-    ]
-    
-    # Combine into a single bash command
-    exec_start = 'bash -c "' + ' && '.join(exec_start_parts) + '"'
+    script_path = workspace_path / 'start_service.sh'
     
     service_content = f"""[Unit]
 Description=Assembly Line Control ROS 2 Launch Service
@@ -92,7 +115,7 @@ WorkingDirectory={workspace_str}
 Environment="HOME={home}"
 Environment="USER={user}"
 
-ExecStart={exec_start}
+ExecStart={script_path}
 
 # Restart policy
 Restart=always
@@ -225,6 +248,26 @@ def main():
         print("  Make sure you've built the workspace with:")
         print("    colcon build --symlink-install")
         print()
+    
+    # Create startup script
+    script_path, script_content = create_startup_script(workspace_path, ros_distro)
+    print(f"Creating startup script: {script_path}")
+    try:
+        script_path.write_text(script_content)
+        # Make script executable
+        os.chmod(script_path, 0o755)
+        # Change ownership to the service user
+        import pwd
+        try:
+            user_info = pwd.getpwnam(user)
+            os.chown(script_path, user_info.pw_uid, user_info.pw_gid)
+        except (KeyError, AttributeError):
+            # If user lookup fails, continue anyway
+            pass
+        print("✓ Startup script created successfully")
+    except Exception as e:
+        print(f"✗ Error creating startup script: {e}")
+        sys.exit(1)
     
     # Create service file
     service_content, service_name = create_service_file(workspace_path, ros_distro, user, home)
