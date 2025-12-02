@@ -61,10 +61,17 @@ def create_service_file(workspace_path, ros_distro, user, home):
     service_name = 'assembly-line-control.service'
     
     # Build the ExecStart command
-    # Source ROS setup, workspace setup, then launch
+    # Source ROS, try git pull, build, source workspace, then launch
     exec_start_parts = [
         f'source /opt/ros/{ros_distro}/setup.bash',
+        f'cd {workspace_str}',
+        # Try git pull if possible (only if working tree is clean)
+        'if [ -d .git ]; then git fetch && if [ -z "$(git status --porcelain)" ]; then git pull || true; fi; fi',
+        # Build the workspace
+        f'colcon build --symlink-install',
+        # Source the workspace setup
         f'source {workspace_str}/install/setup.bash',
+        # Launch the application
         'ros2 launch assembly_line_control assembly_line_control.launch.py'
     ]
     
