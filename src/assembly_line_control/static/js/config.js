@@ -6,7 +6,10 @@ const Config = {
     MOTOR_STEPS_PER_SECOND: 100, // 100 steps = 1 second duration
     
     // ROS Bridge configuration
-    ROS_BRIDGE_URL: 'ws://localhost:9090',
+    // Use the URL provided by the server, or fall back to default
+    ROS_BRIDGE_URL: (typeof window !== 'undefined' && window.ROS_BRIDGE_URL) 
+        ? window.ROS_BRIDGE_URL 
+        : 'ws://localhost:9090',
     ROS_RECONNECT_DELAY: 3000, // milliseconds
     
     // Block configuration

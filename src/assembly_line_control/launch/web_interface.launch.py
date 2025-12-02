@@ -41,7 +41,9 @@ def generate_launch_description():
         executable='web_interface',
         name='web_interface',
         output='screen',
-        parameters=[],
+        parameters=[{
+            'rosbridge_port': LaunchConfiguration('rosbridge_port'),
+        }],
     )
     
     return LaunchDescription([

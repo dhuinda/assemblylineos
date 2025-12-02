@@ -64,7 +64,7 @@
                 </div>
                 <div class="flex items-center gap-2 border-l border-gray-700 pl-2 ml-auto">
                     <p id="rosStatus" class="text-xs status-disconnected font-medium whitespace-nowrap">● DISCONNECTED</p>
-                    <p class="text-xs text-gray-500 whitespace-nowrap">ws://localhost:9090</p>
+                    <p id="rosBridgeUrl" class="text-xs text-gray-500 whitespace-nowrap">{{ rosbridge_url|default("ws://localhost:9090") }}</p>
                 </div>
             </div>
         </div>
@@ -598,6 +598,11 @@
     </div>
 
     <!-- JavaScript Modules -->
+    <!-- Inject ROS Bridge URL before config.js loads -->
+    <script>
+        // ROS Bridge URL from server configuration
+        window.ROS_BRIDGE_URL = '{{ rosbridge_url|default("ws://localhost:9090") }}';
+    </script>
     <script src="{{ url_for('static', filename='js/config.js') }}"></script>
     <script src="{{ url_for('static', filename='js/uiUtils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/simulation_engine.js') }}"></script>
