@@ -55,64 +55,36 @@ def get_user_info():
     return user, home
 
 
-def create_startup_script(workspace_path, ros_distro, home):
-    """Create the startup script that handles git pull, build, and launch."""
-    workspace_str = str(workspace_path)
-    script_path = workspace_path / 'start_service.sh'
+def ensure_service_runner(workspace_path, user):
+    """Ensure run_service.py exists and has proper permissions."""
+    script_path = workspace_path / 'run_service.py'
     
-    script_content = f"""#!/bin/bash
-# Startup script for Assembly Line Control service
-# This script sources ROS, pulls updates, builds, and launches the app
-
-set -e
-
-# Ensure HOME and related environment variables are set correctly (colcon needs these)
-export HOME={home}
-export USER="${{USER:-$(whoami)}}"
-export XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
-export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-$HOME/.cache}}"
-
-# Ensure colcon directories exist with proper permissions
-mkdir -p "$HOME/.colcon" 2>/dev/null || true
-
-# Source ROS setup
-source /opt/ros/{ros_distro}/setup.bash
-
-# Change to workspace directory
-cd {workspace_str}
-
-# Try git pull if possible (only if working tree is clean)
-if [ -d .git ]; then
-    git fetch || true
-    if [ -z "$(git status --porcelain)" ]; then
-        git pull || true
-    fi
-fi
-
-# Ensure install, build, and log directories exist and have correct permissions
-mkdir -p {workspace_str}/install {workspace_str}/build {workspace_str}/log
-chmod -R u+w {workspace_str}/install {workspace_str}/build {workspace_str}/log 2>/dev/null || true
-
-# Build the workspace (without symlinks to avoid permission issues)
-colcon build
-
-# Source the workspace setup (if it exists)
-if [ -f {workspace_str}/install/setup.bash ]; then
-    source {workspace_str}/install/setup.bash
-fi
-
-# Launch the application
-exec ros2 launch assembly_line_control assembly_line_control.launch.py
-"""
+    if not script_path.exists():
+        print(f"✗ Error: run_service.py not found at {script_path}")
+        print("  This script should be in the workspace root directory.")
+        return False
     
-    return script_path, script_content
+    # Make script executable
+    try:
+        os.chmod(script_path, 0o755)
+        # Change ownership to the service user
+        import pwd
+        try:
+            user_info = pwd.getpwnam(user)
+            os.chown(script_path, user_info.pw_uid, user_info.pw_gid)
+        except (KeyError, AttributeError):
+            pass  # If user lookup fails, continue anyway
+        return True
+    except Exception as e:
+        print(f"✗ Error setting permissions on run_service.py: {e}")
+        return False
 
 
 def create_service_file(workspace_path, ros_distro, user, home):
     """Create the systemd service file content."""
     workspace_str = str(workspace_path)
     service_name = 'assembly-line-control.service'
-    script_path = workspace_path / 'start_service.sh'
+    script_path = workspace_path / 'run_service.py'
     
     service_content = f"""[Unit]
 Description=Assembly Line Control ROS 2 Launch Service
@@ -124,11 +96,15 @@ User={user}
 Group={user}
 WorkingDirectory={workspace_str}
 
-# Environment variables
+# Environment variables - CRITICAL for colcon to use correct directories
 Environment="HOME={home}"
 Environment="USER={user}"
+Environment="COLCON_HOME={home}/.colcon"
+Environment="XDG_CONFIG_HOME={home}/.config"
+Environment="XDG_CACHE_HOME={home}/.cache"
+Environment="XDG_DATA_HOME={home}/.local/share"
 
-ExecStart={script_path}
+ExecStart=/usr/bin/env python3 {script_path}
 
 # Restart policy
 Restart=always
@@ -261,32 +237,45 @@ def main():
         print("  The service will build the workspace on first start.")
         print()
     
-    # Create startup script
-    script_path, script_content = create_startup_script(workspace_path, ros_distro, home)
-    print(f"Creating startup script: {script_path}")
-    try:
-        script_path.write_text(script_content)
-        # Make script executable
-        os.chmod(script_path, 0o755)
-        # Change ownership to the service user
-        import pwd
-        try:
-            user_info = pwd.getpwnam(user)
-            os.chown(script_path, user_info.pw_uid, user_info.pw_gid)
-            # Also fix ownership of install/build/log directories if they exist
-            for dir_name in ['install', 'build', 'log']:
-                dir_path = workspace_path / dir_name
-                if dir_path.exists():
-                    # Use subprocess to change ownership recursively (more reliable)
-                    subprocess.run(['chown', '-R', f'{user}:{user}', str(dir_path)], 
-                                 capture_output=True, check=False)
-        except (KeyError, AttributeError):
-            # If user lookup fails, continue anyway
-            pass
-        print("✓ Startup script created successfully")
-    except Exception as e:
-        print(f"✗ Error creating startup script: {e}")
+    # Ensure run_service.py exists and has proper permissions
+    print("Checking run_service.py...")
+    if not ensure_service_runner(workspace_path, user):
         sys.exit(1)
+    print("✓ run_service.py is ready")
+    
+    # Fix ownership of install/build/log directories if they exist
+    import pwd
+    try:
+        user_info = pwd.getpwnam(user)
+        for dir_name in ['install', 'build', 'log']:
+            dir_path = workspace_path / dir_name
+            if dir_path.exists():
+                subprocess.run(['chown', '-R', f'{user}:{user}', str(dir_path)], 
+                             capture_output=True, check=False)
+        
+        # Create .colcon directory structure with proper permissions
+        # This prevents the "permission denied root/.colcon/mixin" error
+        colcon_home = Path(home) / '.colcon'
+        colcon_mixin = colcon_home / 'mixin'
+        colcon_log = colcon_home / 'log'
+        
+        # Create directories if they don't exist
+        for colcon_dir in [colcon_home, colcon_mixin, colcon_log]:
+            if not colcon_dir.exists():
+                colcon_dir.mkdir(parents=True, exist_ok=True)
+                os.chown(colcon_dir, user_info.pw_uid, user_info.pw_gid)
+            else:
+                # Fix ownership if it exists but has wrong permissions
+                subprocess.run(['chown', '-R', f'{user}:{user}', str(colcon_home)], 
+                             capture_output=True, check=False)
+        
+        # Set proper permissions
+        subprocess.run(['chmod', '-R', 'u+rw', str(colcon_home)], 
+                     capture_output=True, check=False)
+        print("✓ Created/fixed .colcon directory with proper permissions")
+    except (KeyError, AttributeError):
+        # If user lookup fails, continue anyway
+        pass
     
     # Create service file
     service_content, service_name = create_service_file(workspace_path, ros_distro, user, home)
