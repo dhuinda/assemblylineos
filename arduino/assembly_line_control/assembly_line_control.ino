@@ -2,18 +2,16 @@
  * Assembly Line Control - Arduino Giga Firmware
  * 
  * Receives commands from Raspberry Pi via USB Serial
- * Controls 4 stepper motors and 4 relays using custom implementation
+ * Controls 2 stepper motors (powering the assembly line) and 4 relays
  * 
  * Hardware Requirements:
  * - Arduino Giga
- * - 4 Stepper motor drivers (e.g., A4988, DRV8825, TMC2208)
+ * - 2 Stepper motor drivers (e.g., A4988, DRV8825, TMC2208)
  * - 4 Relays (or relay modules)
  * 
  * Pin Configuration for Arduino Giga:
- * Motor 1: STEP=2, DIR=3, ENABLE=4
- * Motor 2: STEP=5, DIR=6, ENABLE=7
- * Motor 3: STEP=8, DIR=9, ENABLE=10
- * Motor 4: STEP=11, DIR=12, ENABLE=13
+ * Motor 1: STEP=2, DIR=3
+ * Motor 2: STEP=5, DIR=6
  * 
  * Relay 1: Pin A0
  * Relay 2: Pin A1
@@ -21,15 +19,17 @@
  * Relay 4: Pin A3
  * 
  * Note: Adjust pin numbers based on your hardware configuration
+ * Note: ENABLE pins not used - configure drivers to be always enabled
+ * 
+ * Motor commands (motor_id 1-2) are received from the control system
+ * and control the 2 stepper motors that power the assembly line.
  */
 
-// Motor pin definitions
-// Format: {STEP_PIN, DIR_PIN, ENABLE_PIN}
-const int MOTOR_PINS[4][3] = {
-  {2, 3, 4},   // Motor 1
-  {5, 6, 7},   // Motor 2
-  {8, 9, 10},  // Motor 3
-  {11, 12, 13} // Motor 4
+// Motor pin definitions (2 stepper motors)
+// Format: {STEP_PIN, DIR_PIN}
+const int MOTOR_PINS[2][2] = {
+  {2, 3},   // Motor 1: STEP=2, DIR=3
+  {5, 6}    // Motor 2: STEP=5, DIR=6
 };
 
 // Relay pin definitions
@@ -44,11 +44,11 @@ struct MotorState {
   bool direction;            // Current direction (true = forward, false = backward)
 };
 
-// Motor states array
-MotorState motors[4];
+// Motor states array (2 stepper motors)
+MotorState motors[2];
 
 // Motor speeds (steps per second) - default values
-float motor_speeds[4] = {100.0, 100.0, 100.0, 100.0};
+float motor_speeds[2] = {100.0, 100.0};
 
 // Relay states
 bool relay_states[4] = {false, false, false, false};
@@ -57,7 +57,7 @@ bool relay_states[4] = {false, false, false, false};
 String serialBuffer = "";
 
 // Minimum step interval in microseconds (for maximum speed protection)
-const unsigned long MIN_STEP_INTERVAL = 5000; // 5000 us = 200 steps/sec max
+const unsigned long MIN_STEP_INTERVAL = 50; // 2000 us = 500 steps/sec max
 
 void setup() {
   // Initialize serial communication
@@ -67,18 +67,17 @@ void setup() {
   }
   delay(1000); // Give time for serial to stabilize
   Serial.println("Arduino Giga Assembly Line Control Ready");
+  Serial.println("Configuration: 2 stepper motors, 4 relays");
   
-  // Initialize stepper motors
-  for (int i = 0; i < 4; i++) {
+  // Initialize stepper motors (2 motors powering the assembly line)
+  for (int i = 0; i < 2; i++) {
     // Set pins as outputs
     pinMode(MOTOR_PINS[i][0], OUTPUT); // STEP
     pinMode(MOTOR_PINS[i][1], OUTPUT); // DIR
-    pinMode(MOTOR_PINS[i][2], OUTPUT); // ENABLE
     
     // Initialize pins
     digitalWrite(MOTOR_PINS[i][0], LOW); // STEP starts LOW
     digitalWrite(MOTOR_PINS[i][1], LOW); // DIR starts LOW
-    digitalWrite(MOTOR_PINS[i][2], LOW); // Enable motors (LOW = enabled for most drivers)
     
     // Initialize motor state
     motors[i].steps_remaining = 0;
@@ -94,10 +93,15 @@ void setup() {
     digitalWrite(RELAY_PINS[i], LOW); // Start with relays off
   }
   
+  // Setup built-in LED for status indication
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH); // LED on = ready
+  
   // Clear serial buffer
   serialBuffer.reserve(256);
   
   Serial.println("Initialization complete");
+  Serial.println("Waiting for commands...");
 }
 
 void loop() {
@@ -125,26 +129,34 @@ void readSerialCommands() {
 void processCommand(String command) {
   // Parse JSON-like command
   // Expected format: {"type":"motor","motor_id":1,"steps":100,"speed":50.0}
-  // or: {"type":"relay","relay_id":1,"state":"on"}
+  // or with spaces: {"type": "motor", "motor_id": 1, "steps": 100, "speed": 50.0}
   
   command.trim();
   
-  // Check if it's a motor command
-  if (command.indexOf("\"type\":\"motor\"") >= 0) {
+  // Debug: Echo received command
+  Serial.print("Received: ");
+  Serial.println(command);
+  
+  // Check if it's a motor command (handle both with and without spaces)
+  if (command.indexOf("\"type\":\"motor\"") >= 0 || command.indexOf("\"type\": \"motor\"") >= 0) {
     processMotorCommand(command);
   }
-  // Check if it's a relay command
-  else if (command.indexOf("\"type\":\"relay\"") >= 0) {
+  // Check if it's a relay command (handle both with and without spaces)
+  else if (command.indexOf("\"type\":\"relay\"") >= 0 || command.indexOf("\"type\": \"relay\"") >= 0) {
     processRelayCommand(command);
+  }
+  else {
+    Serial.println("ERROR: Unknown command type");
   }
 }
 
 void processMotorCommand(String command) {
-  // Extract motor_id
+  // Extract motor_id (only 1-2 are valid, matching the control system)
   int motor_id = extractInt(command, "motor_id");
-  if (motor_id < 1 || motor_id > 4) {
+  if (motor_id < 1 || motor_id > 2) {
     Serial.print("ERROR: Invalid motor_id: ");
-    Serial.println(motor_id);
+    Serial.print(motor_id);
+    Serial.println(" (valid range: 1-2)");
     return;
   }
   
@@ -156,7 +168,7 @@ void processMotorCommand(String command) {
   // Extract speed (if provided)
   float speed = extractFloat(command, "speed");
   if (speed > 0) {
-    motor_speeds[motor_index] = constrain(speed, 1.0, 200.0);
+    motor_speeds[motor_index] = constrain(speed, 1.0, 6500);
     motors[motor_index].step_interval = calculateStepInterval(motor_speeds[motor_index]);
   }
   
@@ -169,6 +181,11 @@ void processMotorCommand(String command) {
     
     // Set direction pin
     digitalWrite(MOTOR_PINS[motor_index][1], motors[motor_index].direction ? HIGH : LOW);
+    
+    // Visual feedback - blink LED when motor starts
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(50);
+    digitalWrite(LED_BUILTIN, HIGH);
   }
   
   // Send acknowledgment
@@ -218,7 +235,8 @@ void processRelayCommand(String command) {
 void updateMotors() {
   unsigned long current_time = micros();
   
-  for (int i = 0; i < 4; i++) {
+  // Update stepper motors (2 motors powering the assembly line)
+  for (int i = 0; i < 2; i++) {
     if (motors[i].is_moving && motors[i].steps_remaining != 0) {
       // Check if it's time to take a step
       if ((current_time - motors[i].last_step_time) >= motors[i].step_interval) {
@@ -246,7 +264,7 @@ void updateMotors() {
 }
 
 void stepMotor(int motor_index) {
-  // Generate a step pulse
+  // Generate a step pulse for a stepper motor
   // Most stepper drivers need a rising edge on STEP pin
   digitalWrite(MOTOR_PINS[motor_index][0], HIGH);
   delayMicroseconds(2); // Minimum pulse width (usually 1-2 microseconds)
