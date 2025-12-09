@@ -169,13 +169,8 @@ void processEStopCommand() {
     digitalWrite(RELAY_PINS[i], LOW);
   }
   
-  // Visual feedback - rapid LED blink
-  for (int j = 0; j < 5; j++) {
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(50);
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(50);
-  }
+  // Visual feedback - set LED to LOW to indicate E-STOP (non-blocking)
+  digitalWrite(LED_BUILTIN, LOW);
   
   Serial.println("E-STOP: All motors stopped, all relays off");
 }
@@ -202,15 +197,26 @@ void processMotorCommand(String command) {
     motors[motor_index].step_interval = calculateStepInterval(motor_speeds[motor_index]);
   }
   
+  // Check for explicit stop flag (stop:true in JSON forces motor to stop)
+  bool explicit_stop = (command.indexOf("\"stop\":true") >= 0 || command.indexOf("\"stop\": true") >= 0);
+  
   // Update motor state
-  if (steps == 0) {
-    // Stop command - immediately halt the motor
+  if (explicit_stop) {
+    // Explicit stop command - always stop the motor
     motors[motor_index].steps_remaining = 0;
     motors[motor_index].is_moving = false;
+    digitalWrite(MOTOR_PINS[motor_index][0], LOW);
     
     Serial.print("STOP: Motor ");
     Serial.print(motor_id);
-    Serial.println(" stopped");
+    Serial.println(" stopped (explicit)");
+  } else if (steps == 0) {
+    // steps=0 without explicit stop = speed-only update
+    // Don't stop the motor, just update speed (already done above)
+    Serial.print("SPEED UPDATE: Motor ");
+    Serial.print(motor_id);
+    Serial.print(" speed=");
+    Serial.println(motor_speeds[motor_index]);
   } else {
     motors[motor_index].steps_remaining += steps;
     motors[motor_index].is_moving = true;
@@ -220,9 +226,7 @@ void processMotorCommand(String command) {
     // Set direction pin
     digitalWrite(MOTOR_PINS[motor_index][1], motors[motor_index].direction ? HIGH : LOW);
     
-    // Visual feedback - blink LED when motor starts
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(50);
+    // Visual feedback - set LED HIGH when motor starts (non-blocking)
     digitalWrite(LED_BUILTIN, HIGH);
   }
   
@@ -274,8 +278,17 @@ void updateMotors() {
   unsigned long current_time = micros();
   
   // Update stepper motors (2 motors powering the assembly line)
+  // Each motor runs independently, enabling true parallel execution
   for (int i = 0; i < 2; i++) {
     if (motors[i].is_moving && motors[i].steps_remaining != 0) {
+      // Update direction pin based on current steps_remaining sign
+      // This ensures direction is correct even if new commands change the sign
+      bool new_direction = (motors[i].steps_remaining > 0);
+      if (motors[i].direction != new_direction) {
+        motors[i].direction = new_direction;
+        digitalWrite(MOTOR_PINS[i][1], motors[i].direction ? HIGH : LOW);
+      }
+      
       // Check if it's time to take a step
       if ((current_time - motors[i].last_step_time) >= motors[i].step_interval) {
         // Take a step
@@ -370,9 +383,18 @@ float extractFloat(String json, String key) {
 }
 
 // Helper function to extract string value from JSON string
+// Handles both "key":"value" and "key": "value" (with space after colon)
 String extractString(String json, String key) {
+  // Try without space first: "key":"value"
   String searchKey = "\"" + key + "\":\"";
   int keyIndex = json.indexOf(searchKey);
+  
+  // If not found, try with space: "key": "value"
+  if (keyIndex < 0) {
+    searchKey = "\"" + key + "\": \"";
+    keyIndex = json.indexOf(searchKey);
+  }
+  
   if (keyIndex < 0) {
     return "";
   }

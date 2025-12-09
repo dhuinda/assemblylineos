@@ -45,27 +45,6 @@ const UIUtils = {
     },
     
     /**
-     * Update Arduino connection status display
-     * @param {boolean} connected - Whether Arduino is connected
-     * @param {string} port - The port Arduino is connected on (if connected)
-     */
-    updateArduinoStatus(connected, port = null) {
-        const statusEl = document.getElementById('arduinoStatus');
-        if (!statusEl) return;
-        
-        if (connected) {
-            const portInfo = port ? ` (${port.split('/').pop()})` : '';
-            statusEl.textContent = `● ARDUINO${portInfo}`;
-            statusEl.className = 'text-xs status-connected font-medium';
-            statusEl.title = `Connected to Arduino on ${port || 'unknown port'}`;
-        } else {
-            statusEl.textContent = '● ARDUINO OFFLINE';
-            statusEl.className = 'text-xs status-disconnected font-medium';
-            statusEl.title = 'Arduino not connected - check USB connection';
-        }
-    },
-    
-    /**
      * Show a confirmation dialog
      * @param {string} message - The confirmation message
      * @returns {boolean} - User's choice
@@ -115,7 +94,7 @@ const UIUtils = {
             return;
         }
         
-        // Ensure the canvas is positioned relatively so the absolute overlay works
+        // Ensure the canvas is positioned relatively so the overlay works
         if (getComputedStyle(workspaceCanvas).position === 'static') {
             workspaceCanvas.style.position = 'relative';
         }
@@ -123,6 +102,9 @@ const UIUtils = {
         let overlay = document.getElementById('pauseOverlay');
         
         if (visible) {
+            // Add paused class to workspace canvas for blur effect and scroll lock
+            workspaceCanvas.classList.add('paused');
+            
             // Create overlay if it doesn't exist
             if (!overlay) {
                 overlay = document.createElement('div');
@@ -136,12 +118,12 @@ const UIUtils = {
                         </button>
                     </div>
                 `;
-                // Append directly to workspace canvas so it only covers the designer area
-                workspaceCanvas.appendChild(overlay);
+                // Insert at the beginning of workspace canvas so it appears above all blocks
+                workspaceCanvas.insertBefore(overlay, workspaceCanvas.firstChild);
             } else {
                 // If overlay exists but is in the wrong place, move it to the workspace canvas
                 if (overlay.parentElement !== workspaceCanvas) {
-                    workspaceCanvas.appendChild(overlay);
+                    workspaceCanvas.insertBefore(overlay, workspaceCanvas.firstChild);
                 }
             }
             
@@ -170,8 +152,15 @@ const UIUtils = {
                 }, { once: false });
             }
             
+            // Reset scroll position to top-left to ensure overlay is visible
+            workspaceCanvas.scrollTop = 0;
+            workspaceCanvas.scrollLeft = 0;
+            
             overlay.style.display = 'flex';
         } else {
+            // Remove paused class from workspace canvas
+            workspaceCanvas.classList.remove('paused');
+            
             // Hide overlay if it exists
             if (overlay) {
                 overlay.style.display = 'none';

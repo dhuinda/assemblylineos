@@ -15,9 +15,7 @@ const ROSBridge = {
     estopPub: null,
     motor1StatusSub: null,
     motor2StatusSub: null,
-    arduinoStatusSub: null,
     motorStatus: {}, // Keep track of each motor's status
-    arduinoStatus: { connected: false, port: null }, // Arduino connection status
     isConnected: false,
     dynamicSubscriptions: new Map(), // For subscribing to topics on the fly
     messageThrottle: new Map(), // Slow down updates that come too fast
@@ -209,38 +207,7 @@ const ROSBridge = {
             }
         });
         
-        // Subscribe to Arduino connection status
-        this.arduinoStatusSub = new ROSLIB.Topic({
-            ros: this.ros,
-            name: '/arduino/status',
-            messageType: 'std_msgs/String'
-        });
-        this.arduinoStatusSub.subscribe((msg) => {
-            try {
-                const status = this.safeJsonParse(msg.data, '/arduino/status');
-                if (status) {
-                    const wasConnected = this.arduinoStatus.connected;
-                    this.arduinoStatus = status;
-                    
-                    // Update UI when connection status changes
-                    if (status.connected !== wasConnected) {
-                        UIUtils.updateArduinoStatus(status.connected, status.port);
-                    }
-                }
-            } catch (e) {
-                console.error('Failed to parse Arduino status:', e);
-            }
-        });
-        
         UIUtils.log('[ROS] Subscribers initialized', 'success');
-    },
-    
-    /**
-     * Get Arduino connection status
-     * @returns {Object} - Arduino status
-     */
-    getArduinoStatus() {
-        return this.arduinoStatus;
     },
     
     /**

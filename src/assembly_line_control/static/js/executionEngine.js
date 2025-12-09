@@ -240,6 +240,7 @@ const ExecutionEngine = {
                 if (success) {
                     const duration = motorSpeed > 0 ? (Math.abs(block.steps || 0) / motorSpeed) : 0;
                     UIUtils.log(`  → Motor ${block.motor_id}: ${block.steps || 0} steps (${duration.toFixed(2)}s @ ${motorSpeed} sps ${speedLabel})`, 'success');
+                    // Wait for motor to complete - parallel branches will wait concurrently via Promise.all
                     await this.sleep(duration * 1000);
                 }
             } else if (block.type === 'relay') {

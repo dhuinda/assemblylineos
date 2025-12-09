@@ -52,11 +52,25 @@ class ArduinoController(Node):
         self.reconnect_delay = 5.0  # seconds between reconnection attempts
         self.last_successful_port = None
         
+        # Connection status stability - prevent flickering
+        self._last_published_connected = None  # Track last published state
+        self._disconnect_count = 0  # Count consecutive disconnect indicators
+        self._disconnect_threshold = 2  # Need this many consecutive failures to mark disconnected
+        
         # Parameters
         self.declare_parameter('serial_port', '')
         self.declare_parameter('serial_baud', 115200)
         
-        # Initialize serial connection
+        # === PUBLISHERS (create first so they're available during init) ===
+        self.motor1_status_pub = self.create_publisher(String, 'motor1/status', 10)
+        self.motor2_status_pub = self.create_publisher(String, 'motor2/status', 10)
+        self.relay1_status_pub = self.create_publisher(String, 'relay1/status', 10)
+        self.relay2_status_pub = self.create_publisher(String, 'relay2/status', 10)
+        self.relay3_status_pub = self.create_publisher(String, 'relay3/status', 10)
+        self.relay4_status_pub = self.create_publisher(String, 'relay4/status', 10)
+        self.connection_status_pub = self.create_publisher(String, 'arduino/status', 10)
+        
+        # Initialize serial connection (after publishers are created)
         self.init_serial_connection()
         
         # Start background thread to read Arduino responses
@@ -93,19 +107,10 @@ class ArduinoController(Node):
             String, 'estop', 
             self.estop_callback, 10)
         
-        # === PUBLISHERS ===
-        self.motor1_status_pub = self.create_publisher(String, 'motor1/status', 10)
-        self.motor2_status_pub = self.create_publisher(String, 'motor2/status', 10)
-        self.relay1_status_pub = self.create_publisher(String, 'relay1/status', 10)
-        self.relay2_status_pub = self.create_publisher(String, 'relay2/status', 10)
-        self.relay3_status_pub = self.create_publisher(String, 'relay3/status', 10)
-        self.relay4_status_pub = self.create_publisher(String, 'relay4/status', 10)
-        self.connection_status_pub = self.create_publisher(String, 'arduino/status', 10)
-        
         # Timers - 10Hz for motor status is enough for smooth display without jitter
         self.motor_update_timer = self.create_timer(0.1, self.update_motor_states)
         self.relay_status_timer = self.create_timer(1.0, self.publish_all_relay_status)
-        self.connection_status_timer = self.create_timer(2.0, self.publish_connection_status)
+        self.connection_status_timer = self.create_timer(5.0, self.publish_connection_status)
         
         self.get_logger().info('Arduino controller started (unified motor + relay control)')
     
@@ -149,7 +154,7 @@ class ArduinoController(Node):
         self.connected = False
     
     def _try_connect_port(self, port):
-        """Try to connect to a specific port and verify Arduino is responding"""
+        """Try to connect to a specific port - if port opens, we're connected"""
         try:
             # Close existing connection if any
             if self.serial_port and self.serial_port.is_open:
@@ -167,23 +172,21 @@ class ArduinoController(Node):
             )
             
             # Wait for Arduino to reset after connection
-            time.sleep(2.5)
+            time.sleep(2.0)
             
             # Clear any startup messages
             self.serial_port.reset_input_buffer()
             
-            # Verify connection by checking for response
-            if self._verify_arduino_connection():
-                self.connected = True
-                self.last_successful_port = port
-                self.connection_attempts = 0
-                self.get_logger().info(f'✓ Successfully connected to Arduino on {port} at {self.serial_baud} baud')
-                return True
-            else:
-                self.get_logger().warn(f'Port {port} opened but Arduino not responding correctly')
-                self.serial_port.close()
-                self.serial_port = None
-                return False
+            # If we got here, port opened successfully - we're connected
+            self.connected = True
+            self.last_successful_port = port
+            self.connection_attempts = 0
+            self._disconnect_count = 0
+            self.get_logger().info(f'✓ Connected to Arduino on {port} at {self.serial_baud} baud')
+            
+            # Immediately publish connection status
+            self._publish_connected_status()
+            return True
                 
         except serial.SerialException as e:
             self.get_logger().warn(f'Could not open port {port}: {e}')
@@ -192,43 +195,6 @@ class ArduinoController(Node):
         except Exception as e:
             self.get_logger().error(f'Unexpected error connecting to {port}: {e}')
             self.serial_port = None
-            return False
-    
-    def _verify_arduino_connection(self):
-        """Verify the Arduino is responding by reading startup message or sending a test command"""
-        try:
-            # Give Arduino time to send startup message
-            time.sleep(0.5)
-            
-            # Read any available data (looking for startup message)
-            if self.serial_port.in_waiting > 0:
-                response = self.serial_port.read(self.serial_port.in_waiting).decode('utf-8', errors='ignore')
-                if 'arduino' in response.lower() or 'ready' in response.lower() or 'assembly' in response.lower():
-                    self.get_logger().info(f'Arduino startup message received: {response.strip()[:100]}')
-                    return True
-            
-            # Send a simple status query (a motor command with 0 steps just updates speed)
-            test_command = '{"type":"motor","motor_id":1,"steps":0,"speed":100.0}\n'
-            self.serial_port.write(test_command.encode('utf-8'))
-            self.serial_port.flush()
-            
-            # Wait for response
-            time.sleep(0.3)
-            
-            if self.serial_port.in_waiting > 0:
-                response = self.serial_port.read(self.serial_port.in_waiting).decode('utf-8', errors='ignore')
-                # Look for acknowledgment patterns
-                if 'OK' in response or 'Motor' in response or 'STOP' in response or 'Received' in response:
-                    self.get_logger().info(f'Arduino responded: {response.strip()[:100]}')
-                    return True
-            
-            # Even if no response, if the port opened successfully, consider it connected
-            # Some Arduinos might not respond to our test command format
-            self.get_logger().warn('No response from Arduino, but port opened successfully')
-            return True
-            
-        except Exception as e:
-            self.get_logger().warn(f'Error verifying Arduino connection: {e}')
             return False
     
     def find_arduino_ports(self):
@@ -300,8 +266,9 @@ class ArduinoController(Node):
             try:
                 time.sleep(self.reconnect_delay)
                 
-                # Check if connection is lost
-                if not self.connected or not self.serial_port or not self.serial_port.is_open:
+                # Only try to reconnect if self.connected is explicitly False
+                # Don't check serial_port.is_open as it can be flaky
+                if not self.connected:
                     if self.connection_attempts < self.max_connection_attempts:
                         self.connection_attempts += 1
                         self.get_logger().info(f'Attempting to reconnect to Arduino (attempt {self.connection_attempts}/{self.max_connection_attempts})...')
@@ -322,6 +289,9 @@ class ArduinoController(Node):
     def _read_responses(self):
         """Background thread to read Arduino responses"""
         buffer = ""
+        consecutive_errors = 0
+        max_consecutive_errors = 5  # Only mark disconnected after multiple failures
+        
         while self.running:
             try:
                 # Check if we have a valid connection
@@ -333,6 +303,7 @@ class ArduinoController(Node):
                     if self.serial_port and self.serial_port.is_open and self.serial_port.in_waiting > 0:
                         data = self.serial_port.read(self.serial_port.in_waiting).decode('utf-8', errors='ignore')
                         buffer += data
+                        consecutive_errors = 0  # Reset on successful read
                 
                 while '\n' in buffer:
                     line, buffer = buffer.split('\n', 1)
@@ -340,12 +311,15 @@ class ArduinoController(Node):
                     if line:
                         # Log Arduino responses at info level so they're visible
                         self.get_logger().info(f'[Arduino] {line}')
+                        consecutive_errors = 0  # Reset on valid data
                 
                 time.sleep(0.01)
             except serial.SerialException as e:
                 if self.running:
-                    self.get_logger().error(f'Serial connection lost: {e}')
-                    self.connected = False
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        self.get_logger().error(f'Serial connection lost after {consecutive_errors} errors: {e}')
+                        self.connected = False
                     # Don't break - let the connection monitor handle reconnection
                 time.sleep(0.5)
             except Exception as e:
@@ -369,8 +343,8 @@ class ArduinoController(Node):
                 self.serial_port.flush()
             return True
         except serial.SerialException as e:
-            self.get_logger().error(f'Serial write error (connection lost?): {e}')
-            self.connected = False
+            self.get_logger().error(f'Serial write error: {e}')
+            # Don't set connected=False here - let read thread handle disconnect detection
             return False
         except Exception as e:
             self.get_logger().error(f'Error sending command: {e}')
@@ -385,13 +359,24 @@ class ArduinoController(Node):
         current_time = time.time()
         
         if steps == 0:
-            # Stop command - immediately halt the motor
+            # Explicit stop command - halt the motor
             state['steps_remaining'] = 0
             state['steps_total'] = 0
             state['is_moving'] = False
             state['start_time'] = 0
             state['expected_duration'] = 0
-            self.get_logger().info(f'Motor {motor_id}: STOP command received')
+            
+            # Send explicit stop command to Arduino
+            command = {
+                'type': 'motor',
+                'motor_id': motor_id,
+                'steps': 0,
+                'speed': float(state['speed']),
+                'stop': True  # Explicit stop flag
+            }
+            
+            if self.send_command(command):
+                self.get_logger().info(f'Motor {motor_id}: STOPPED')
         else:
             # New movement command - reset tracking
             state['steps_remaining'] = abs(steps)
@@ -403,18 +388,15 @@ class ArduinoController(Node):
                 state['expected_duration'] = abs(steps) / state['speed']
             else:
                 state['expected_duration'] = 0
-        
-        command = {
-            'type': 'motor',
-            'motor_id': motor_id,
-            'steps': int(steps),
-            'speed': float(state['speed'])
-        }
-        
-        if self.send_command(command):
-            if steps == 0:
-                self.get_logger().info(f'Motor {motor_id}: STOPPED')
-            else:
+            
+            command = {
+                'type': 'motor',
+                'motor_id': motor_id,
+                'steps': int(steps),
+                'speed': float(state['speed'])
+            }
+            
+            if self.send_command(command):
                 self.get_logger().info(f'Motor {motor_id}: {steps} steps at {state["speed"]} steps/sec (est. {state["expected_duration"]:.2f}s)')
     
     def motor_speed_callback(self, motor_id, msg):
@@ -570,16 +552,41 @@ class ArduinoController(Node):
         
         self.get_logger().warn('E-STOP: All systems stopped')
     
-    def publish_connection_status(self):
-        """Publish Arduino connection status"""
+    def _publish_connected_status(self):
+        """Immediately publish connected status (called right after successful connection)"""
+        self._last_published_connected = True
         status = {
-            'connected': self.connected,
-            'port': self.last_successful_port if self.connected else None,
-            'baud': self.serial_baud if self.connected else None
+            'connected': True,
+            'port': self.last_successful_port,
+            'baud': self.serial_baud
         }
         msg = String()
         msg.data = json.dumps(status)
         self.connection_status_pub.publish(msg)
+        self.get_logger().info(f'Arduino status: connected on {self.last_successful_port}')
+    
+    def publish_connection_status(self):
+        """Publish Arduino connection status periodically so new clients get it"""
+        # Simple logic: if we have a successful port and connected flag is true, we're connected
+        is_connected = self.connected and self.last_successful_port is not None
+        
+        # Always publish current status so new browser connections receive it
+        status = {
+            'connected': is_connected,
+            'port': self.last_successful_port if is_connected else None,
+            'baud': self.serial_baud if is_connected else None
+        }
+        msg = String()
+        msg.data = json.dumps(status)
+        self.connection_status_pub.publish(msg)
+        
+        # Only log if state changed
+        if self._last_published_connected != is_connected:
+            self._last_published_connected = is_connected
+            if is_connected:
+                self.get_logger().info(f'Arduino status: connected on {self.last_successful_port}')
+            else:
+                self.get_logger().warn('Arduino status: disconnected')
     
     def destroy_node(self):
         """Clean up on shutdown"""
