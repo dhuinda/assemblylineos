@@ -180,9 +180,10 @@ const SimulationEngine = {
      * Simulate motor command
      * @param {number} motorId - Motor ID (1 or 2)
      * @param {number} steps - Number of steps to move
+     * @param {number} speed - Optional speed in steps per second
      * @returns {boolean} - Success status
      */
-    simulateMotorCommand(motorId, steps) {
+    simulateMotorCommand(motorId, steps, speed = null) {
         if (!this.isActive) {
             return false;
         }
@@ -191,6 +192,13 @@ const SimulationEngine = {
         if (!motor) {
             UIUtils.log(`[SIMULATION] Invalid motor ID: ${motorId}`, 'error');
             return false;
+        }
+        
+        // If speed is provided, set it
+        if (speed !== null) {
+            const minSpeed = Config.MIN_MOTOR_SPEED || 1;
+            const maxSpeed = Config.MAX_MOTOR_SPEED || 6500;
+            motor.speed = Math.max(minSpeed, Math.min(maxSpeed, speed));
         }
         
         if (steps === 0) {
@@ -205,7 +213,7 @@ const SimulationEngine = {
         motor.isMoving = true;
         motor.lastUpdateTime = performance.now();
         
-        UIUtils.log(`[SIMULATION] Motor ${motorId}: ${steps > 0 ? '+' : ''}${steps} steps (total remaining: ${motor.stepsRemaining.toFixed(1)})`, 'info');
+        UIUtils.log(`[SIMULATION] Motor ${motorId}: ${steps > 0 ? '+' : ''}${steps} steps @ ${motor.speed} sps (total remaining: ${motor.stepsRemaining.toFixed(1)})`, 'info');
         return true;
     },
     
@@ -217,7 +225,9 @@ const SimulationEngine = {
     setMotorSpeed(motorId, speed) {
         const motor = this.motors[motorId];
         if (motor) {
-            motor.speed = Math.max(1, Math.min(200, speed));
+            const minSpeed = Config.MIN_MOTOR_SPEED || 1;
+            const maxSpeed = Config.MAX_MOTOR_SPEED || 6500;
+            motor.speed = Math.max(minSpeed, Math.min(maxSpeed, speed));
             UIUtils.log(`[SIMULATION] Motor ${motorId} speed set to ${motor.speed} steps/second`, 'info');
         }
     },

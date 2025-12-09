@@ -22,14 +22,9 @@ install(PROGRAMS
   RENAME web_interface
 )
 install(PROGRAMS
-  ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/motor_controller.py
+  ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/arduino_controller.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME motor_controller
-)
-install(PROGRAMS
-  ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/relay_controller.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME relay_controller
+  RENAME arduino_controller
 )
 install(PROGRAMS
   ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/sensor_controller.py

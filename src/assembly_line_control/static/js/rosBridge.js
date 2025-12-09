@@ -8,8 +8,11 @@ const ROSBridge = {
     ros: null,
     motor1Pub: null,
     motor2Pub: null,
+    motor1SpeedPub: null,
+    motor2SpeedPub: null,
     relayPub: null,
     sequencePub: null,
+    estopPub: null,
     motor1StatusSub: null,
     motor2StatusSub: null,
     motorStatus: {}, // Keep track of each motor's status
@@ -111,6 +114,18 @@ const ROSBridge = {
             messageType: 'std_msgs/Int32'
         });
         
+        this.motor1SpeedPub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/motor1/speed',
+            messageType: 'std_msgs/Float32'
+        });
+        
+        this.motor2SpeedPub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/motor2/speed',
+            messageType: 'std_msgs/Float32'
+        });
+        
         this.relayPub = new ROSLIB.Topic({
             ros: this.ros,
             name: '/relay/command',
@@ -123,6 +138,12 @@ const ROSBridge = {
             messageType: 'std_msgs/String'
         });
         
+        this.estopPub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/estop',
+            messageType: 'std_msgs/String'
+        });
+        
         UIUtils.log('[ROS] Publishers initialized', 'success');
     },
     
@@ -131,8 +152,8 @@ const ROSBridge = {
      */
     initializeSubscribers() {
         // Listen for motor status updates
-        // Slow them down a bit so we don't get overwhelmed (max 20 times per second)
-        const motorStatusThrottle = 50;
+        // Throttle to 10Hz (100ms) to match the ROS publisher rate and reduce jitter
+        const motorStatusThrottle = 100;
         
         this.motor1StatusSub = new ROSLIB.Topic({
             ros: this.ros,
@@ -207,12 +228,13 @@ const ROSBridge = {
      * Publish a motor command
      * @param {number} motorId - Motor ID (1 or 2)
      * @param {number} steps - Number of steps
+     * @param {number} speed - Optional speed in steps per second (if not provided, uses global speed)
      * @returns {boolean} - Success status
      */
-    publishMotorCommand(motorId, steps) {
+    publishMotorCommand(motorId, steps, speed = null) {
         // Check if simulation mode is active
         if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
-            return SimulationEngine.simulateMotorCommand(motorId, steps);
+            return SimulationEngine.simulateMotorCommand(motorId, steps, speed);
         }
         
         if (!this.isConnected) {
@@ -221,8 +243,14 @@ const ROSBridge = {
         }
         
         let motorPub = null;
-        if (motorId === 1) motorPub = this.motor1Pub;
-        else if (motorId === 2) motorPub = this.motor2Pub;
+        let speedPub = null;
+        if (motorId === 1) {
+            motorPub = this.motor1Pub;
+            speedPub = this.motor1SpeedPub;
+        } else if (motorId === 2) {
+            motorPub = this.motor2Pub;
+            speedPub = this.motor2SpeedPub;
+        }
         
         if (!motorPub) {
             UIUtils.log(`[ROS] Motor ${motorId} publisher not initialized`, 'error');
@@ -230,6 +258,13 @@ const ROSBridge = {
         }
         
         try {
+            // If speed is provided, set it first
+            if (speed !== null && speedPub) {
+                const speedMsg = new ROSLIB.Message({ data: parseFloat(speed) });
+                speedPub.publish(speedMsg);
+            }
+            
+            // Then send the steps command
             const msg = new ROSLIB.Message({ data: parseInt(steps) });
             motorPub.publish(msg);
             return true;
@@ -248,7 +283,7 @@ const ROSBridge = {
             for (let motorId = 1; motorId <= 2; motorId++) {
                 SimulationEngine.simulateMotorCommand(motorId, 0);
             }
-            UIUtils.log('[PAUSE] All motors stopped (simulation)', 'warning');
+            UIUtils.log('[STOP] All motors stopped (simulation)', 'warning');
             return;
         }
         
@@ -257,11 +292,50 @@ const ROSBridge = {
             return;
         }
         
-        // Tell both motors to stop
+        // Tell both motors to stop (0 steps = stop command)
         for (let motorId = 1; motorId <= 2; motorId++) {
             this.publishMotorCommand(motorId, 0);
         }
-        UIUtils.log('[PAUSE] All motors stopped', 'warning');
+        UIUtils.log('[STOP] All motors stopped', 'warning');
+    },
+    
+    /**
+     * Emergency stop - stops all motors and turns off all relays via dedicated E-Stop command
+     */
+    emergencyStop() {
+        // Check if simulation mode is active
+        if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+            SimulationEngine.reset();
+            UIUtils.log('[E-STOP] Emergency stop (simulation)', 'error');
+            return true;
+        }
+        
+        if (!this.isConnected) {
+            UIUtils.log('[ROS] Not connected, cannot send E-Stop', 'error');
+            return false;
+        }
+        
+        // Send E-Stop command via dedicated topic
+        try {
+            if (this.estopPub) {
+                const msg = new ROSLIB.Message({ data: 'ESTOP' });
+                this.estopPub.publish(msg);
+                UIUtils.log('[E-STOP] Emergency stop command sent', 'error');
+            }
+            
+            // Also stop motors individually as backup
+            this.stopAllMotors();
+            
+            // Turn off all relays
+            for (let relayId = 1; relayId <= 4; relayId++) {
+                this.publishRelayCommand(relayId, 'off');
+            }
+            
+            return true;
+        } catch (error) {
+            UIUtils.log(`[E-STOP] Error sending E-Stop: ${error}`, 'error');
+            return false;
+        }
     },
     
     /**

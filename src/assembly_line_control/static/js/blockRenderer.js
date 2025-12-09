@@ -21,6 +21,13 @@ const BlockRenderer = {
         block.dataset.type = blockData.type;
         block.dataset.blockId = blockData.id;
         
+        // Add motor_id or relay_id to dataset for querying
+        if (blockData.type === 'motor' && blockData.motor_id) {
+            block.dataset.motorId = blockData.motor_id;
+        } else if (blockData.type === 'relay' && blockData.relay_id) {
+            block.dataset.relayId = blockData.relay_id;
+        }
+        
         // Calculate width and height (always odd multiples of grid size)
         const width = BlockSystem.calculateBlockWidth(blockData);
         const height = BlockSystem.calculateBlockHeight(blockData);
@@ -181,8 +188,11 @@ const BlockRenderer = {
                 </div>
             `;
         } else if (blockData.type === 'motor') {
-            const motorSpeed = MotorSpeedManager.getSpeed(blockData.motor_id);
-            const duration = motorSpeed > 0 ? ((blockData.steps || 0) / motorSpeed).toFixed(2) : '0.00';
+            // Use custom speed if set, otherwise use global speed
+            const hasCustomSpeed = blockData.speed !== undefined && blockData.speed !== null;
+            const motorSpeed = hasCustomSpeed ? blockData.speed : MotorSpeedManager.getSpeed(blockData.motor_id);
+            const duration = motorSpeed > 0 ? (Math.abs(blockData.steps || 0) / motorSpeed).toFixed(2) : '0.00';
+            const speedLabel = hasCustomSpeed ? 'custom' : 'global';
             return `
                 <div class="flex flex-col gap-1" style="font-size: 10px;">
                     <div class="flex items-center gap-2">
@@ -193,8 +203,16 @@ const BlockRenderer = {
                            placeholder="steps" data-param="steps" value="${blockData.steps || 0}"
                            onclick="event.stopPropagation()"
                            style="max-width: 100%;">
-                    <div class="text-xs text-gray-400">
-                        ${duration}s @ ${motorSpeed} sps
+                    <div class="flex items-center gap-1">
+                        <input type="number" class="w-16 px-1 py-0.5 text-xs text-white accent-motor" 
+                               placeholder="speed" data-param="speed" value="${hasCustomSpeed ? blockData.speed : ''}"
+                               onclick="event.stopPropagation()"
+                               min="1" max="6500"
+                               title="Custom speed (leave empty for global)">
+                        <span class="text-xs text-gray-500">sps</span>
+                    </div>
+                    <div class="text-xs text-gray-400 motor-duration-display">
+                        ${duration}s @ ${motorSpeed} sps (${speedLabel})
                     </div>
                 </div>
             `;

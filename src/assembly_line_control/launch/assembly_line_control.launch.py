@@ -6,8 +6,8 @@ Launch file for Assembly Line OS
 This starts up everything you need:
 - ROS Bridge WebSocket server (lets the web interface talk to ROS)
 - Web Interface (serves the HTML/JS interface)
-- Motor Controller (tracks motor positions and sends commands)
-- Relay Controller (tracks relay states and sends commands)
+- Arduino Controller (unified motor + relay control over single serial connection)
+- Sensor Controller (monitors sensors)
 """
 
 from launch import LaunchDescription
@@ -54,20 +54,13 @@ def generate_launch_description():
         }],
     )
     
-    # Start the motor controller that talks to the Arduino
-    motor_controller_node = Node(
+    # Start the unified Arduino controller (handles both motors and relays)
+    # This replaces the separate motor_controller and relay_controller
+    # to avoid serial port conflicts
+    arduino_controller_node = Node(
         package='assembly_line_control',
-        executable='motor_controller',
-        name='motor_controller',
-        output='screen',
-        parameters=[],
-    )
-    
-    # Start the relay controller that talks to the Arduino
-    relay_controller_node = Node(
-        package='assembly_line_control',
-        executable='relay_controller',
-        name='relay_controller',
+        executable='arduino_controller',
+        name='arduino_controller',
         output='screen',
         parameters=[],
     )
@@ -86,8 +79,7 @@ def generate_launch_description():
         web_port_arg,
         rosbridge_node,
         web_interface_node,
-        motor_controller_node,
-        relay_controller_node,
+        arduino_controller_node,
         sensor_controller_node,
     ])
 

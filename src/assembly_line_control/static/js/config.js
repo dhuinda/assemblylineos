@@ -3,7 +3,9 @@
  */
 const Config = {
     // Motor configuration
-    MOTOR_STEPS_PER_SECOND: 100, // 100 steps = 1 second duration
+    MOTOR_STEPS_PER_SECOND: 100, // Default: 100 steps = 1 second duration
+    MIN_MOTOR_SPEED: 1, // Minimum motor speed in steps per second
+    MAX_MOTOR_SPEED: 6500, // Maximum motor speed in steps per second (Arduino limit)
     
     // ROS Bridge configuration
     // Use the URL provided by the server, or fall back to default

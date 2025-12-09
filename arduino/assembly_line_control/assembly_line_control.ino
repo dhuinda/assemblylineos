@@ -137,8 +137,12 @@ void processCommand(String command) {
   Serial.print("Received: ");
   Serial.println(command);
   
+  // Check if it's an E-STOP command (highest priority)
+  if (command.indexOf("\"type\":\"estop\"") >= 0 || command.indexOf("\"type\": \"estop\"") >= 0) {
+    processEStopCommand();
+  }
   // Check if it's a motor command (handle both with and without spaces)
-  if (command.indexOf("\"type\":\"motor\"") >= 0 || command.indexOf("\"type\": \"motor\"") >= 0) {
+  else if (command.indexOf("\"type\":\"motor\"") >= 0 || command.indexOf("\"type\": \"motor\"") >= 0) {
     processMotorCommand(command);
   }
   // Check if it's a relay command (handle both with and without spaces)
@@ -148,6 +152,32 @@ void processCommand(String command) {
   else {
     Serial.println("ERROR: Unknown command type");
   }
+}
+
+void processEStopCommand() {
+  Serial.println("E-STOP: Emergency stop activated!");
+  
+  // Stop all motors immediately
+  for (int i = 0; i < 2; i++) {
+    motors[i].steps_remaining = 0;
+    motors[i].is_moving = false;
+  }
+  
+  // Turn off all relays
+  for (int i = 0; i < 4; i++) {
+    relay_states[i] = false;
+    digitalWrite(RELAY_PINS[i], LOW);
+  }
+  
+  // Visual feedback - rapid LED blink
+  for (int j = 0; j < 5; j++) {
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(50);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(50);
+  }
+  
+  Serial.println("E-STOP: All motors stopped, all relays off");
 }
 
 void processMotorCommand(String command) {
@@ -173,7 +203,15 @@ void processMotorCommand(String command) {
   }
   
   // Update motor state
-  if (steps != 0) {
+  if (steps == 0) {
+    // Stop command - immediately halt the motor
+    motors[motor_index].steps_remaining = 0;
+    motors[motor_index].is_moving = false;
+    
+    Serial.print("STOP: Motor ");
+    Serial.print(motor_id);
+    Serial.println(" stopped");
+  } else {
     motors[motor_index].steps_remaining += steps;
     motors[motor_index].is_moving = true;
     motors[motor_index].direction = (steps > 0);

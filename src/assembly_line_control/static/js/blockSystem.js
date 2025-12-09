@@ -44,6 +44,15 @@ const BlockSystem = {
                 const steps = stepsInput ? parseInt(stepsInput.value) || 0 : 0;
                 data.steps = this.validateSteps(steps);
                 
+                // Check for custom speed
+                const speedInput = blockElement.querySelector('[data-param="speed"]');
+                if (speedInput && speedInput.value !== '') {
+                    const speed = parseInt(speedInput.value);
+                    if (!isNaN(speed) && speed >= 1) {
+                        data.speed = this.validateSpeed(speed);
+                    }
+                }
+                
             } else if (type === 'relay') {
                 const relayId = blockElement.dataset.relayId || blockElement.getAttribute('data-relay-id');
                 if (!relayId) {
@@ -148,6 +157,18 @@ const BlockSystem = {
     },
     
     /**
+     * Validate and clamp motor speed value
+     * @param {number} speed - Speed value to validate
+     * @returns {number} - Validated speed value
+     */
+    validateSpeed(speed) {
+        if (isNaN(speed)) return Config.MOTOR_STEPS_PER_SECOND;
+        const minSpeed = Config.MIN_MOTOR_SPEED || 1;
+        const maxSpeed = Config.MAX_MOTOR_SPEED || 6500;
+        return Math.max(minSpeed, Math.min(maxSpeed, Math.round(speed)));
+    },
+    
+    /**
      * Validate a block's data
      * @param {Object} blockData - Block data to validate
      * @returns {Object} - Validation result with isValid and errors array
@@ -239,6 +260,10 @@ const BlockSystem = {
         } else if (templateData.type === 'motor') {
             block.motor_id = templateData.motor_id;
             block.steps = this.validateSteps(templateData.steps || 0);
+            // Preserve custom speed if set
+            if (templateData.speed !== undefined && templateData.speed !== null) {
+                block.speed = this.validateSpeed(templateData.speed);
+            }
         } else if (templateData.type === 'relay') {
             block.relay_id = templateData.relay_id;
             block.state = templateData.state || 'off';
@@ -314,7 +339,9 @@ const BlockSystem = {
         } else if (blockData.type === 'read-sensor' || blockData.type === 'throw-error') {
             // Has: header + one input field
             baseHeight = 120; // 6 grid units -> will become 7 (odd) = 140px
-        } else if (blockData.type === 'motor' || blockData.type === 'relay' || blockData.type === 'delay' || blockData.type === 'repeat') {
+        } else if (blockData.type === 'motor') {
+            baseHeight = 140; // 7 grid units = 140px (has steps + speed inputs + duration display)
+        } else if (blockData.type === 'relay' || blockData.type === 'delay' || blockData.type === 'repeat') {
             baseHeight = 100; // 5 grid units (already odd) = 100px
         } else if (blockData.type === 'event') {
             baseHeight = 100; // 5 grid units (already odd) = 100px
@@ -346,20 +373,36 @@ const BlockSystem = {
                 }
             } else if (blockData.type === 'motor') {
                 const stepsInput = blockEl.querySelector('[data-param="steps"]');
+                const speedInput = blockEl.querySelector('[data-param="speed"]');
+                
                 if (stepsInput) {
-                    const oldSteps = blockData.steps;
                     blockData.steps = this.validateSteps(parseInt(stepsInput.value) || 0);
-                    
-                    // Update visual display with current motor speed
-                    const motorSpeed = MotorSpeedManager.getSpeed(blockData.motor_id);
-                    const duration = motorSpeed > 0 ? ((blockData.steps || 0) / motorSpeed).toFixed(2) : '0.00';
-                    const timeDisplay = blockEl.querySelector('.text-gray-400');
-                    if (timeDisplay) {
-                        timeDisplay.textContent = `${duration}s @ ${motorSpeed} sps`;
+                }
+                
+                // Handle custom speed
+                if (speedInput) {
+                    if (speedInput.value !== '' && speedInput.value !== null) {
+                        const speed = parseInt(speedInput.value);
+                        if (!isNaN(speed) && speed >= 1) {
+                            blockData.speed = this.validateSpeed(speed);
+                        } else {
+                            delete blockData.speed; // Remove custom speed if invalid
+                        }
+                    } else {
+                        delete blockData.speed; // Remove custom speed if empty (use global)
                     }
-                    
-                    // Width is now fixed, so no need to update it
-                    // Removed width recalculation to prevent block expansion
+                }
+                
+                // Determine which speed to display
+                const hasCustomSpeed = blockData.speed !== undefined && blockData.speed !== null;
+                const motorSpeed = hasCustomSpeed ? blockData.speed : MotorSpeedManager.getSpeed(blockData.motor_id);
+                const duration = motorSpeed > 0 ? (Math.abs(blockData.steps || 0) / motorSpeed).toFixed(2) : '0.00';
+                const speedLabel = hasCustomSpeed ? 'custom' : 'global';
+                
+                // Update visual display
+                const timeDisplay = blockEl.querySelector('.motor-duration-display');
+                if (timeDisplay) {
+                    timeDisplay.textContent = `${duration}s @ ${motorSpeed} sps (${speedLabel})`;
                 }
             } else if (blockData.type === 'relay') {
                 const select = blockEl.querySelector('[data-param="state"]');

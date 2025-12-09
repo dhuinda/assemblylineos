@@ -26,8 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'web_interface = assembly_line_control.web_interface:main',
-            'motor_controller = assembly_line_control.motor_controller:main',
-            'relay_controller = assembly_line_control.relay_controller:main',
+            'arduino_controller = assembly_line_control.arduino_controller:main',
             'sensor_controller = assembly_line_control.sensor_controller:main',
         ],
     },

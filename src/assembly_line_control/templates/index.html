@@ -351,24 +351,28 @@
                                 <div class="flex items-center justify-between">
                                     <span class="text-xs text-gray-400">MOTOR 1</span>
                                     <div class="flex items-center gap-2">
-                                        <input type="range" id="motor1Speed" min="1" max="200" value="100" 
+                                        <input type="range" id="motor1Speed" min="1" max="6500" value="100" 
                                                class="w-24 accent-motor" 
                                                oninput="updateMotorSpeed(1, this.value)">
-                                        <span id="motor1SpeedValue" class="text-xs accent-motor w-12 text-right">100</span>
+                                        <input type="number" id="motor1SpeedValue" min="1" max="6500" value="100"
+                                               class="text-xs accent-motor w-16 text-right bg-transparent border border-gray-600 rounded px-1"
+                                               onchange="updateMotorSpeed(1, this.value)">
                                     </div>
                                 </div>
                                 <div class="flex items-center justify-between">
                                     <span class="text-xs text-gray-400">MOTOR 2</span>
                                     <div class="flex items-center gap-2">
-                                        <input type="range" id="motor2Speed" min="1" max="200" value="100" 
+                                        <input type="range" id="motor2Speed" min="1" max="6500" value="100" 
                                                class="w-24 accent-motor" 
                                                oninput="updateMotorSpeed(2, this.value)">
-                                        <span id="motor2SpeedValue" class="text-xs accent-motor w-12 text-right">100</span>
+                                        <input type="number" id="motor2SpeedValue" min="1" max="6500" value="100"
+                                               class="text-xs accent-motor w-16 text-right bg-transparent border border-gray-600 rounded px-1"
+                                               onchange="updateMotorSpeed(2, this.value)">
                                     </div>
                                 </div>
                             </div>
                             <div class="mt-3 text-xs text-gray-500">
-                                Speed: steps per second (default: 100)
+                                Speed: steps per second (1-6500, default: 100)
                             </div>
                         </div>
 
@@ -1097,19 +1101,14 @@
         function emergencyStop() {
             UIUtils.log('[E-STOP] Emergency stop activated!', 'error');
             
-            // Stop execution
+            // Stop execution engine first
             if (typeof ExecutionEngine !== 'undefined') {
                 ExecutionEngine.stop();
             }
             
-            // Stop all motors
+            // Send E-Stop command (stops all motors and relays)
             if (typeof ROSBridge !== 'undefined') {
-                ROSBridge.stopAllMotors();
-                
-                // Turn off all relays
-                for (let relayId = 1; relayId <= 4; relayId++) {
-                    ROSBridge.publishRelayCommand(relayId, 'off');
-                }
+                ROSBridge.emergencyStop();
             }
             
             // If simulation is active, reset it

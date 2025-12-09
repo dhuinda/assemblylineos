@@ -231,11 +231,15 @@ const ExecutionEngine = {
         
         try {
             if (block.type === 'motor') {
-                const success = ROSBridge.publishMotorCommand(block.motor_id, block.steps || 0);
+                // Use custom speed if set, otherwise use global motor speed
+                const hasCustomSpeed = block.speed !== undefined && block.speed !== null;
+                const motorSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
+                const speedLabel = hasCustomSpeed ? 'custom' : 'global';
+                
+                const success = ROSBridge.publishMotorCommand(block.motor_id, block.steps || 0, motorSpeed);
                 if (success) {
-                    const motorSpeed = MotorSpeedManager.getSpeed(block.motor_id);
                     const duration = motorSpeed > 0 ? (Math.abs(block.steps || 0) / motorSpeed) : 0;
-                    UIUtils.log(`  → Motor ${block.motor_id}: ${block.steps || 0} steps (${duration.toFixed(2)}s @ ${motorSpeed} sps)`, 'success');
+                    UIUtils.log(`  → Motor ${block.motor_id}: ${block.steps || 0} steps (${duration.toFixed(2)}s @ ${motorSpeed} sps ${speedLabel})`, 'success');
                     await this.sleep(duration * 1000);
                 }
             } else if (block.type === 'relay') {
@@ -641,7 +645,11 @@ const ExecutionEngine = {
             let timeRemaining = 0;
             
             if (block.type === 'motor') {
-                const motorSpeed = MotorSpeedManager.getSpeed(block.motor_id);
+                // Use custom speed if set, otherwise use global motor speed
+                const hasCustomSpeed = block.speed !== undefined && block.speed !== null;
+                const motorSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
+                const speedLabel = hasCustomSpeed ? 'custom' : 'global';
+                
                 const motorStatus = ROSBridge.getMotorStatus(block.motor_id);
                 const stepsRemaining = motorStatus ? motorStatus.steps_remaining : null;
                 const totalSteps = block.steps || 0;
@@ -659,7 +667,9 @@ const ExecutionEngine = {
                 
                 let stepsDisplay = `${totalSteps} steps`;
                 if (stepsRemaining !== null && stepsRemaining !== undefined) {
-                    stepsDisplay = `${Math.abs(stepsRemaining)} remaining / ${totalSteps} total`;
+                    // Round to avoid display glitches from floating point values
+                    const displayRemaining = Math.round(Math.abs(stepsRemaining));
+                    stepsDisplay = `${displayRemaining} remaining / ${totalSteps} total`;
                 }
                 
                 content = `
@@ -672,7 +682,7 @@ const ExecutionEngine = {
                         <span>Elapsed: ${blockElapsed.toFixed(2)}s</span>
                         <span>Remaining: ${timeRemaining.toFixed(2)}s</span>
                     </div>
-                    <div class="text-xs text-gray-500 mt-1">Est. total: ${estimatedDuration.toFixed(2)}s @ ${motorSpeed} sps</div>
+                    <div class="text-xs text-gray-500 mt-1">Est. total: ${estimatedDuration.toFixed(2)}s @ ${motorSpeed} sps (${speedLabel})</div>
                 `;
             } else if (block.type === 'relay') {
                 estimatedDuration = 0; // Relays are instant
@@ -851,10 +861,10 @@ const ExecutionEngine = {
      * Uses requestAnimationFrame for smoother, more efficient updates
      */
     startActiveBlocksUpdates() {
-        // Use requestAnimationFrame for smoother updates (typically 60fps)
-        // This is more efficient than setInterval and syncs with browser rendering
+        // Use requestAnimationFrame for smoother updates
+        // Match the ROS status update rate (10Hz) to avoid display jitter
         let lastUpdateTime = 0;
-        const targetFPS = 30; // Update at 30fps for real-time control (33ms between updates)
+        const targetFPS = 10; // Update at 10fps to match ROS publisher rate (100ms)
         const minUpdateInterval = 1000 / targetFPS;
         
         const updateLoop = (currentTime) => {
@@ -927,5 +937,76 @@ const ExecutionEngine = {
                 setTimeout(checkInterval, Math.min(ms, 16));
             }
         });
+    },
+    
+    /**
+     * Build execution order for playback visualization
+     * Returns an array of {block, lane, startTime, endTime} objects
+     */
+    buildExecutionOrder() {
+        const executionOrder = [];
+        const startableWorkflows = WorkflowManager.getStartableWorkflows();
+        
+        // Process each workflow
+        startableWorkflows.forEach((workflowId, laneIndex) => {
+            const workflow = WorkflowManager.workflows.get(workflowId);
+            if (!workflow) return;
+            
+            // Find the root block (green flag event)
+            let rootBlockId = null;
+            workflow.blocks.forEach(blockId => {
+                const block = WorkflowManager.blocks.get(blockId);
+                if (block && block.type === 'event' && block.eventType === 'green-flag') {
+                    rootBlockId = blockId;
+                }
+            });
+            
+            if (!rootBlockId) return;
+            
+            // Walk through the chain of blocks
+            let currentTime = 0;
+            let currentBlockId = rootBlockId;
+            const visited = new Set();
+            
+            while (currentBlockId && !visited.has(currentBlockId)) {
+                visited.add(currentBlockId);
+                const block = WorkflowManager.blocks.get(currentBlockId);
+                if (!block) break;
+                
+                // Calculate block duration
+                let duration = 0.01; // Minimum duration for instant blocks
+                
+                if (block.type === 'motor') {
+                    const hasCustomSpeed = block.speed !== undefined && block.speed !== null;
+                    const motorSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
+                    duration = motorSpeed > 0 ? Math.abs(block.steps || 0) / motorSpeed : 0.01;
+                } else if (block.type === 'delay') {
+                    duration = block.duration || 1.0;
+                } else if (block.type === 'pause') {
+                    duration = 2.0; // Assume pause is ~2 seconds for visualization
+                }
+                
+                // Add to execution order
+                executionOrder.push({
+                    block: currentBlockId,
+                    lane: laneIndex,
+                    startTime: currentTime,
+                    endTime: currentTime + Math.max(0.01, duration)
+                });
+                
+                currentTime += Math.max(0.01, duration);
+                
+                // Get next block in chain
+                const connections = BlockConnector.connections.get(currentBlockId);
+                if (connections && connections.next) {
+                    const nextBlocks = Array.isArray(connections.next) ? connections.next : [connections.next];
+                    currentBlockId = nextBlocks[0]; // Follow the first connection for now
+                } else {
+                    currentBlockId = null;
+                }
+            }
+        });
+        
+        return executionOrder;
     }
 };
