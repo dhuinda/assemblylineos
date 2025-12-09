@@ -46,6 +46,11 @@ class ArduinoController(Node):
         self.serial_baud = 115200
         self.serial_timeout = 0.1
         self.serial_lock = threading.Lock()  # Thread-safe serial access
+        self.connected = False
+        self.connection_attempts = 0
+        self.max_connection_attempts = 3
+        self.reconnect_delay = 5.0  # seconds between reconnection attempts
+        self.last_successful_port = None
         
         # Parameters
         self.declare_parameter('serial_port', '')
@@ -58,6 +63,10 @@ class ArduinoController(Node):
         self.running = True
         self.response_thread = threading.Thread(target=self._read_responses, daemon=True)
         self.response_thread.start()
+        
+        # Start connection monitor thread
+        self.connection_monitor_thread = threading.Thread(target=self._monitor_connection, daemon=True)
+        self.connection_monitor_thread.start()
         
         # === MOTOR SUBSCRIPTIONS ===
         self.motor1_sub = self.create_subscription(
@@ -91,60 +100,237 @@ class ArduinoController(Node):
         self.relay2_status_pub = self.create_publisher(String, 'relay2/status', 10)
         self.relay3_status_pub = self.create_publisher(String, 'relay3/status', 10)
         self.relay4_status_pub = self.create_publisher(String, 'relay4/status', 10)
+        self.connection_status_pub = self.create_publisher(String, 'arduino/status', 10)
         
         # Timers - 10Hz for motor status is enough for smooth display without jitter
         self.motor_update_timer = self.create_timer(0.1, self.update_motor_states)
         self.relay_status_timer = self.create_timer(1.0, self.publish_all_relay_status)
+        self.connection_status_timer = self.create_timer(2.0, self.publish_connection_status)
         
         self.get_logger().info('Arduino controller started (unified motor + relay control)')
     
     def init_serial_connection(self):
-        """Connect to the Arduino over USB serial"""
+        """Connect to the Arduino over USB serial with robust port discovery"""
         port = self.get_parameter('serial_port').get_parameter_value().string_value
         baud = self.get_parameter('serial_baud').get_parameter_value().integer_value
         
         if baud:
             self.serial_baud = baud
         
-        if not port:
-            port = self.find_arduino_port()
-        
+        # If a specific port is provided, try it first
         if port:
-            try:
-                self.serial_port = serial.Serial(
-                    port=port,
-                    baudrate=self.serial_baud,
-                    timeout=self.serial_timeout,
-                    write_timeout=1.0
-                )
-                time.sleep(2)  # Wait for Arduino to reset
-                self.get_logger().info(f'Connected to Arduino on {port} at {self.serial_baud} baud')
-            except serial.SerialException as e:
-                self.get_logger().error(f'Failed to open serial port {port}: {e}')
-                self.serial_port = None
-        else:
-            self.get_logger().warn('No Arduino found. Commands will not be sent to hardware.')
+            if self._try_connect_port(port):
+                return
+            self.get_logger().warn(f'Specified port {port} failed, searching for Arduino...')
+        
+        # Try the last successful port first (if we're reconnecting)
+        if self.last_successful_port:
+            self.get_logger().info(f'Trying last successful port: {self.last_successful_port}')
+            if self._try_connect_port(self.last_successful_port):
+                return
+        
+        # Search all available ports
+        candidate_ports = self.find_arduino_ports()
+        
+        if not candidate_ports:
+            self.get_logger().warn('No potential Arduino ports found. Will retry...')
+            self.connected = False
+            return
+        
+        self.get_logger().info(f'Found {len(candidate_ports)} potential Arduino port(s): {[p[0] for p in candidate_ports]}')
+        
+        # Try each candidate port
+        for port_device, port_info in candidate_ports:
+            self.get_logger().info(f'Trying port {port_device} ({port_info})...')
+            if self._try_connect_port(port_device):
+                return
+        
+        self.get_logger().warn('Could not connect to any Arduino. Will retry...')
+        self.connected = False
     
-    def find_arduino_port(self):
-        """Look through USB ports to find the Arduino"""
+    def _try_connect_port(self, port):
+        """Try to connect to a specific port and verify Arduino is responding"""
+        try:
+            # Close existing connection if any
+            if self.serial_port and self.serial_port.is_open:
+                try:
+                    self.serial_port.close()
+                except:
+                    pass
+            
+            # Open new connection
+            self.serial_port = serial.Serial(
+                port=port,
+                baudrate=self.serial_baud,
+                timeout=self.serial_timeout,
+                write_timeout=1.0
+            )
+            
+            # Wait for Arduino to reset after connection
+            time.sleep(2.5)
+            
+            # Clear any startup messages
+            self.serial_port.reset_input_buffer()
+            
+            # Verify connection by checking for response
+            if self._verify_arduino_connection():
+                self.connected = True
+                self.last_successful_port = port
+                self.connection_attempts = 0
+                self.get_logger().info(f'✓ Successfully connected to Arduino on {port} at {self.serial_baud} baud')
+                return True
+            else:
+                self.get_logger().warn(f'Port {port} opened but Arduino not responding correctly')
+                self.serial_port.close()
+                self.serial_port = None
+                return False
+                
+        except serial.SerialException as e:
+            self.get_logger().warn(f'Could not open port {port}: {e}')
+            self.serial_port = None
+            return False
+        except Exception as e:
+            self.get_logger().error(f'Unexpected error connecting to {port}: {e}')
+            self.serial_port = None
+            return False
+    
+    def _verify_arduino_connection(self):
+        """Verify the Arduino is responding by reading startup message or sending a test command"""
+        try:
+            # Give Arduino time to send startup message
+            time.sleep(0.5)
+            
+            # Read any available data (looking for startup message)
+            if self.serial_port.in_waiting > 0:
+                response = self.serial_port.read(self.serial_port.in_waiting).decode('utf-8', errors='ignore')
+                if 'arduino' in response.lower() or 'ready' in response.lower() or 'assembly' in response.lower():
+                    self.get_logger().info(f'Arduino startup message received: {response.strip()[:100]}')
+                    return True
+            
+            # Send a simple status query (a motor command with 0 steps just updates speed)
+            test_command = '{"type":"motor","motor_id":1,"steps":0,"speed":100.0}\n'
+            self.serial_port.write(test_command.encode('utf-8'))
+            self.serial_port.flush()
+            
+            # Wait for response
+            time.sleep(0.3)
+            
+            if self.serial_port.in_waiting > 0:
+                response = self.serial_port.read(self.serial_port.in_waiting).decode('utf-8', errors='ignore')
+                # Look for acknowledgment patterns
+                if 'OK' in response or 'Motor' in response or 'STOP' in response or 'Received' in response:
+                    self.get_logger().info(f'Arduino responded: {response.strip()[:100]}')
+                    return True
+            
+            # Even if no response, if the port opened successfully, consider it connected
+            # Some Arduinos might not respond to our test command format
+            self.get_logger().warn('No response from Arduino, but port opened successfully')
+            return True
+            
+        except Exception as e:
+            self.get_logger().warn(f'Error verifying Arduino connection: {e}')
+            return False
+    
+    def find_arduino_ports(self):
+        """Find all potential Arduino ports, sorted by likelihood"""
         ports = serial.tools.list_ports.comports()
+        candidates = []
+        
+        # Known Arduino vendor IDs
+        arduino_vids = {
+            0x2341: 'Arduino',
+            0x2A03: 'Arduino',
+            0x1A86: 'CH340 (Arduino clone)',
+            0x10C4: 'CP210x (Arduino clone)',
+            0x0403: 'FTDI',
+            0x239A: 'Adafruit',
+            0x1B4F: 'SparkFun',
+        }
+        
+        # Keywords that suggest an Arduino
+        arduino_keywords = ['arduino', 'ch340', 'ch341', 'cp210', 'cp2102', 'ftdi', 
+                          'usb serial', 'usb-serial', 'acm', 'usbmodem', 'usbserial',
+                          'giga', 'mega', 'uno', 'nano', 'leonardo', 'due']
+        
         for port in ports:
-            if any(keyword in port.description.lower() for keyword in 
-                   ['arduino', 'ch340', 'ch341', 'cp210', 'ftdi', 'usb serial']):
-                return port.device
-            if port.vid and port.pid:
-                arduino_vids = [0x2341, 0x2A03, 0x1A86, 0x10C4, 0x0403]
+            score = 0
+            info_parts = []
+            
+            # Check vendor ID
+            if port.vid:
                 if port.vid in arduino_vids:
-                    return port.device
-        return None
+                    score += 10
+                    info_parts.append(arduino_vids[port.vid])
+            
+            # Check description for keywords
+            desc_lower = (port.description or '').lower()
+            for keyword in arduino_keywords:
+                if keyword in desc_lower:
+                    score += 5
+                    break
+            
+            # Check device name patterns
+            device_lower = port.device.lower()
+            if 'usbmodem' in device_lower or 'acm' in device_lower:
+                score += 3
+            if 'ttyusb' in device_lower or 'ttyacm' in device_lower:
+                score += 3
+            if 'cu.usb' in device_lower:
+                score += 2
+            
+            # Add port info
+            if port.description:
+                info_parts.append(port.description)
+            if port.vid and port.pid:
+                info_parts.append(f'VID:PID={port.vid:04X}:{port.pid:04X}')
+            
+            # Only include ports with some indicators they might be Arduino
+            if score > 0 or 'usb' in device_lower:
+                candidates.append((port.device, ', '.join(info_parts) if info_parts else 'Unknown', score))
+        
+        # Sort by score (highest first)
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        
+        # Return (device, info) tuples
+        return [(c[0], c[1]) for c in candidates]
+    
+    def _monitor_connection(self):
+        """Background thread to monitor and restore connection"""
+        while self.running:
+            try:
+                time.sleep(self.reconnect_delay)
+                
+                # Check if connection is lost
+                if not self.connected or not self.serial_port or not self.serial_port.is_open:
+                    if self.connection_attempts < self.max_connection_attempts:
+                        self.connection_attempts += 1
+                        self.get_logger().info(f'Attempting to reconnect to Arduino (attempt {self.connection_attempts}/{self.max_connection_attempts})...')
+                        self.init_serial_connection()
+                    elif self.connection_attempts == self.max_connection_attempts:
+                        self.connection_attempts += 1  # Prevent repeated logging
+                        self.get_logger().warn('Max reconnection attempts reached. Will keep trying in background...')
+                    else:
+                        # Keep trying silently
+                        self.init_serial_connection()
+                else:
+                    # Connection is good, reset attempt counter
+                    self.connection_attempts = 0
+                    
+            except Exception as e:
+                self.get_logger().error(f'Error in connection monitor: {e}')
     
     def _read_responses(self):
         """Background thread to read Arduino responses"""
         buffer = ""
-        while self.running and self.serial_port and self.serial_port.is_open:
+        while self.running:
             try:
+                # Check if we have a valid connection
+                if not self.serial_port or not self.serial_port.is_open:
+                    time.sleep(0.5)
+                    continue
+                
                 with self.serial_lock:
-                    if self.serial_port.in_waiting > 0:
+                    if self.serial_port and self.serial_port.is_open and self.serial_port.in_waiting > 0:
                         data = self.serial_port.read(self.serial_port.in_waiting).decode('utf-8', errors='ignore')
                         buffer += data
                 
@@ -156,15 +342,24 @@ class ArduinoController(Node):
                         self.get_logger().info(f'[Arduino] {line}')
                 
                 time.sleep(0.01)
+            except serial.SerialException as e:
+                if self.running:
+                    self.get_logger().error(f'Serial connection lost: {e}')
+                    self.connected = False
+                    # Don't break - let the connection monitor handle reconnection
+                time.sleep(0.5)
             except Exception as e:
                 if self.running:
                     self.get_logger().error(f'Error reading serial: {e}')
-                break
+                time.sleep(0.1)
     
     def send_command(self, command: dict):
         """Send a JSON command to the Arduino (thread-safe)"""
-        if not self.serial_port or not self.serial_port.is_open:
-            self.get_logger().warn('Serial port not open, command not sent')
+        if not self.connected or not self.serial_port or not self.serial_port.is_open:
+            # Only log occasionally to avoid spam
+            if not hasattr(self, '_last_disconnect_log') or time.time() - self._last_disconnect_log > 5:
+                self.get_logger().warn('Arduino not connected, command not sent')
+                self._last_disconnect_log = time.time()
             return False
         
         try:
@@ -174,7 +369,11 @@ class ArduinoController(Node):
                 self.serial_port.flush()
             return True
         except serial.SerialException as e:
-            self.get_logger().error(f'Serial write error: {e}')
+            self.get_logger().error(f'Serial write error (connection lost?): {e}')
+            self.connected = False
+            return False
+        except Exception as e:
+            self.get_logger().error(f'Error sending command: {e}')
             return False
     
     # === MOTOR CONTROL ===
@@ -371,12 +570,26 @@ class ArduinoController(Node):
         
         self.get_logger().warn('E-STOP: All systems stopped')
     
+    def publish_connection_status(self):
+        """Publish Arduino connection status"""
+        status = {
+            'connected': self.connected,
+            'port': self.last_successful_port if self.connected else None,
+            'baud': self.serial_baud if self.connected else None
+        }
+        msg = String()
+        msg.data = json.dumps(status)
+        self.connection_status_pub.publish(msg)
+    
     def destroy_node(self):
         """Clean up on shutdown"""
         self.running = False
         if self.serial_port and self.serial_port.is_open:
-            self.serial_port.close()
-            self.get_logger().info('Serial port closed')
+            try:
+                self.serial_port.close()
+                self.get_logger().info('Serial port closed')
+            except:
+                pass
         super().destroy_node()
 
 

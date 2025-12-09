@@ -45,6 +45,27 @@ const UIUtils = {
     },
     
     /**
+     * Update Arduino connection status display
+     * @param {boolean} connected - Whether Arduino is connected
+     * @param {string} port - The port Arduino is connected on (if connected)
+     */
+    updateArduinoStatus(connected, port = null) {
+        const statusEl = document.getElementById('arduinoStatus');
+        if (!statusEl) return;
+        
+        if (connected) {
+            const portInfo = port ? ` (${port.split('/').pop()})` : '';
+            statusEl.textContent = `● ARDUINO${portInfo}`;
+            statusEl.className = 'text-xs status-connected font-medium';
+            statusEl.title = `Connected to Arduino on ${port || 'unknown port'}`;
+        } else {
+            statusEl.textContent = '● ARDUINO OFFLINE';
+            statusEl.className = 'text-xs status-disconnected font-medium';
+            statusEl.title = 'Arduino not connected - check USB connection';
+        }
+    },
+    
+    /**
      * Show a confirmation dialog
      * @param {string} message - The confirmation message
      * @returns {boolean} - User's choice
