@@ -111,6 +111,11 @@ class ArduinoController(Node):
             String, 'estop', 
             self.estop_callback, 10)
         
+        # === RECONNECT SUBSCRIPTION ===
+        self.reconnect_sub = self.create_subscription(
+            String, 'arduino/reconnect',
+            self.reconnect_callback, 10)
+        
         # Timers - 10Hz for motor status is enough for smooth display without jitter
         self.motor_update_timer = self.create_timer(0.1, self.update_motor_states)
         self.relay_status_timer = self.create_timer(1.0, self.publish_all_relay_status)
@@ -625,6 +630,44 @@ class ArduinoController(Node):
             self.publish_relay_status(relay_id)
         
         self.get_logger().warn('E-STOP: All systems stopped')
+    
+    def reconnect_callback(self, msg):
+        """Handle reconnect request from web interface"""
+        self.get_logger().info('Reconnect request received')
+        self.force_reconnect()
+    
+    def force_reconnect(self):
+        """Force a reconnection to the Arduino - closes current connection and reconnects"""
+        self.get_logger().info('Forcing Arduino reconnection...')
+        
+        # Close existing connection
+        if self.serial_port:
+            try:
+                if self.serial_port.is_open:
+                    self.serial_port.close()
+                    self.get_logger().info('Closed existing serial connection')
+            except Exception as e:
+                self.get_logger().warn(f'Error closing serial port: {e}')
+            self.serial_port = None
+        
+        # Mark as disconnected to trigger reconnection
+        self.connected = False
+        self.connection_attempts = 0
+        self._disconnect_count = 0
+        
+        # Reload pin configuration before reconnecting
+        self.pin_config = self.load_pin_config()
+        
+        # Wait a moment for the port to be released
+        time.sleep(0.5)
+        
+        # Attempt to reconnect
+        self.init_serial_connection()
+        
+        if self.connected:
+            self.get_logger().info('Arduino reconnected successfully')
+        else:
+            self.get_logger().warn('Arduino reconnection initiated - will keep trying in background')
     
     def _publish_connected_status(self):
         """Immediately publish connected status (called right after successful connection)"""

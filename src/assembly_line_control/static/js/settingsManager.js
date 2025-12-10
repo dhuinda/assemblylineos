@@ -44,11 +44,13 @@ const SettingsManager = {
             // Load current settings first
             this.loadSettings().then(() => {
                 this.populateForm();
+                this.updateArduinoStatus();
                 modal.classList.add('visible');
             }).catch(() => {
                 // Use defaults if load fails
                 this.config = JSON.parse(JSON.stringify(this.defaultConfig));
                 this.populateForm();
+                this.updateArduinoStatus();
                 modal.classList.add('visible');
             });
         }
@@ -372,6 +374,103 @@ const SettingsManager = {
      */
     getConfig() {
         return this.config;
+    },
+    
+    /**
+     * Update Arduino connection status in the settings dialog
+     */
+    updateArduinoStatus() {
+        const statusEl = document.getElementById('settingsArduinoStatus');
+        const reconnectBtn = document.getElementById('reconnectArduinoBtn');
+        
+        if (!statusEl) return;
+        
+        // Check ROSBridge connection status and Arduino status
+        if (typeof ROSBridge !== 'undefined' && ROSBridge.isConnected) {
+            // Check for Arduino status from ROSBridge (if available)
+            // For now, we'll show ROS connection status
+            statusEl.textContent = '● Connected to ROS';
+            statusEl.className = 'text-xs font-medium text-green-400';
+            if (reconnectBtn) {
+                reconnectBtn.disabled = false;
+                reconnectBtn.classList.remove('opacity-50');
+            }
+        } else {
+            statusEl.textContent = '● ROS Disconnected';
+            statusEl.className = 'text-xs font-medium text-red-400';
+            if (reconnectBtn) {
+                reconnectBtn.disabled = true;
+                reconnectBtn.classList.add('opacity-50');
+            }
+        }
+    },
+    
+    /**
+     * Reconnect to Arduino - closes connection and reconnects with new settings
+     */
+    async reconnectArduino() {
+        const reconnectBtn = document.getElementById('reconnectArduinoBtn');
+        const statusEl = document.getElementById('settingsArduinoStatus');
+        
+        // Disable button during reconnection
+        if (reconnectBtn) {
+            reconnectBtn.disabled = true;
+            reconnectBtn.textContent = '↻ Reconnecting...';
+            reconnectBtn.classList.add('opacity-50');
+        }
+        
+        if (statusEl) {
+            statusEl.textContent = '● Reconnecting...';
+            statusEl.className = 'text-xs font-medium text-yellow-400';
+        }
+        
+        try {
+            const response = await fetch('/api/arduino/reconnect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                if (typeof UIUtils !== 'undefined') {
+                    UIUtils.log('[SETTINGS] Arduino reconnect request sent', 'success');
+                }
+                
+                // Wait a moment for reconnection to happen
+                setTimeout(() => {
+                    if (statusEl) {
+                        statusEl.textContent = '● Reconnect initiated';
+                        statusEl.className = 'text-xs font-medium text-green-400';
+                    }
+                    if (reconnectBtn) {
+                        reconnectBtn.disabled = false;
+                        reconnectBtn.textContent = '↻ Reconnect Arduino';
+                        reconnectBtn.classList.remove('opacity-50');
+                    }
+                }, 2000);
+                
+            } else {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to reconnect');
+            }
+        } catch (error) {
+            console.error('[Settings] Error reconnecting Arduino:', error);
+            
+            if (typeof UIUtils !== 'undefined') {
+                UIUtils.log(`[SETTINGS] Arduino reconnect failed: ${error.message}`, 'error');
+            }
+            
+            if (statusEl) {
+                statusEl.textContent = '● Reconnect failed';
+                statusEl.className = 'text-xs font-medium text-red-400';
+            }
+            if (reconnectBtn) {
+                reconnectBtn.disabled = false;
+                reconnectBtn.textContent = '↻ Reconnect Arduino';
+                reconnectBtn.classList.remove('opacity-50');
+            }
+        }
     }
 };
 

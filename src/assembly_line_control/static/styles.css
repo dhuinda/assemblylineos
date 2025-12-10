@@ -1251,6 +1251,23 @@ button:disabled {
     color: white;
 }
 
+/* Settings Connection Box */
+.settings-connection-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #252525;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+
+.settings-connection-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 /* Settings Footer */
 .settings-footer {
     padding: 16px 20px;

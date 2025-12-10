@@ -683,6 +683,23 @@
                     </div>
                     <p class="settings-hint">Add custom pins for sensors, LEDs, or other I/O</p>
                 </div>
+                
+                <!-- Arduino Connection Section -->
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Arduino Connection</h3>
+                    <div class="settings-connection-box">
+                        <div class="settings-connection-status">
+                            <span class="text-xs text-gray-400">Status:</span>
+                            <span id="settingsArduinoStatus" class="text-xs font-medium">Checking...</span>
+                        </div>
+                        <button onclick="SettingsManager.reconnectArduino()" 
+                                id="reconnectArduinoBtn"
+                                class="btn-primary px-4 py-2 text-sm">
+                            ↻ Reconnect Arduino
+                        </button>
+                    </div>
+                    <p class="settings-hint">Reconnect to apply new pin settings to the Arduino</p>
+                </div>
             </div>
             
             <div class="settings-footer">

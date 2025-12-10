@@ -41,6 +41,9 @@ class MotorCommandPublisher(Node):
         # Set up publisher for executing entire sequences
         self.sequence_pub = self.create_publisher(String, 'sequence/execute', 10)
         
+        # Set up publisher for Arduino reconnect requests
+        self.reconnect_pub = self.create_publisher(String, 'arduino/reconnect', 10)
+        
         self.get_logger().info('Motor command publisher node started')
     
     def get_rosbridge_config(self):
@@ -335,6 +338,23 @@ def save_settings():
         return jsonify({"error": f"Invalid JSON: {e}"}), 400
     except Exception as e:
         print(f"Error saving settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/arduino/reconnect', methods=['POST'])
+def reconnect_arduino():
+    """Trigger Arduino reconnection to apply new pin settings."""
+    try:
+        if ros_node and hasattr(ros_node, 'reconnect_pub'):
+            msg = String()
+            msg.data = 'reconnect'
+            ros_node.reconnect_pub.publish(msg)
+            print("Arduino reconnect request sent via ROS")
+            return jsonify({"success": True, "message": "Reconnect request sent"})
+        else:
+            return jsonify({"error": "ROS node not available"}), 503
+    except Exception as e:
+        print(f"Error sending reconnect request: {e}")
         return jsonify({"error": str(e)}), 500
 
 
