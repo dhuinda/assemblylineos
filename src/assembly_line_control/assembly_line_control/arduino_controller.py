@@ -16,6 +16,7 @@ import time
 import serial
 import serial.tools.list_ports
 import threading
+from pathlib import Path
 
 
 class ArduinoController(Node):
@@ -60,6 +61,9 @@ class ArduinoController(Node):
         # Parameters
         self.declare_parameter('serial_port', '')
         self.declare_parameter('serial_baud', 115200)
+        
+        # Pin configuration
+        self.pin_config = self.load_pin_config()
         
         # === PUBLISHERS (create first so they're available during init) ===
         self.motor1_status_pub = self.create_publisher(String, 'motor1/status', 10)
@@ -113,6 +117,72 @@ class ArduinoController(Node):
         self.connection_status_timer = self.create_timer(5.0, self.publish_connection_status)
         
         self.get_logger().info('Arduino controller started (unified motor + relay control)')
+    
+    def get_pin_config_path(self):
+        """Get the path to the pin configuration file."""
+        config_dir = Path.home() / '.assembly_line_os'
+        return config_dir / 'pin_config.json'
+    
+    def load_pin_config(self):
+        """Load pin configuration from file."""
+        config_path = self.get_pin_config_path()
+        
+        default_config = {
+            "motors": [
+                {"id": 1, "step_pin": 2, "dir_pin": 3},
+                {"id": 2, "step_pin": 5, "dir_pin": 6}
+            ],
+            "relays": [
+                {"id": 1, "pin": 54},
+                {"id": 2, "pin": 55},
+                {"id": 3, "pin": 56},
+                {"id": 4, "pin": 57}
+            ],
+            "custom": []
+        }
+        
+        try:
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                self.get_logger().info(f'Loaded pin configuration from {config_path}')
+                return config
+            else:
+                self.get_logger().info('No pin configuration file found, using defaults')
+                return default_config
+        except Exception as e:
+            self.get_logger().error(f'Error loading pin configuration: {e}')
+            return default_config
+    
+    def send_pin_config(self):
+        """Send pin configuration to Arduino."""
+        if not self.connected or not self.serial_port or not self.serial_port.is_open:
+            self.get_logger().warn('Cannot send pin config: not connected')
+            return False
+        
+        try:
+            # Reload config in case it was updated
+            self.pin_config = self.load_pin_config()
+            
+            # Build config command
+            config_command = {
+                'type': 'config',
+                'motors': self.pin_config.get('motors', []),
+                'relays': self.pin_config.get('relays', []),
+                'custom': self.pin_config.get('custom', [])
+            }
+            
+            # Send the configuration
+            if self.send_command(config_command):
+                self.get_logger().info('Pin configuration sent to Arduino')
+                return True
+            else:
+                self.get_logger().warn('Failed to send pin configuration to Arduino')
+                return False
+                
+        except Exception as e:
+            self.get_logger().error(f'Error sending pin configuration: {e}')
+            return False
     
     def init_serial_connection(self):
         """Connect to the Arduino over USB serial with robust port discovery"""
@@ -186,6 +256,10 @@ class ArduinoController(Node):
             
             # Immediately publish connection status
             self._publish_connected_status()
+            
+            # Send pin configuration to Arduino
+            self.send_pin_config()
+            
             return True
                 
         except serial.SerialException as e:

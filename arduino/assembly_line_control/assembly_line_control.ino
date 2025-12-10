@@ -25,15 +25,26 @@
  * and control the 2 stepper motors that power the assembly line.
  */
 
-// Motor pin definitions (2 stepper motors)
+// Motor pin definitions (2 stepper motors) - can be reconfigured via serial
 // Format: {STEP_PIN, DIR_PIN}
-const int MOTOR_PINS[2][2] = {
-  {2, 3},   // Motor 1: STEP=2, DIR=3
-  {5, 6}    // Motor 2: STEP=5, DIR=6
+int MOTOR_PINS[2][2] = {
+  {2, 3},   // Motor 1: STEP=2, DIR=3 (default)
+  {5, 6}    // Motor 2: STEP=5, DIR=6 (default)
 };
 
-// Relay pin definitions
-const int RELAY_PINS[4] = {A0, A1, A2, A3};
+// Relay pin definitions - can be reconfigured via serial
+int RELAY_PINS[4] = {A0, A1, A2, A3};  // Default: A0-A3 (pins 54-57)
+
+// Custom pins - for user-defined I/O
+#define MAX_CUSTOM_PINS 16
+struct CustomPin {
+  char name[32];
+  int pin;
+  int mode;  // 0=INPUT, 1=OUTPUT, 2=INPUT_PULLUP
+  bool configured;
+};
+CustomPin customPins[MAX_CUSTOM_PINS];
+int numCustomPins = 0;
 
 // Motor state structure
 struct MotorState {
@@ -93,6 +104,15 @@ void setup() {
     digitalWrite(RELAY_PINS[i], LOW); // Start with relays off
   }
   
+  // Initialize custom pins array
+  for (int i = 0; i < MAX_CUSTOM_PINS; i++) {
+    customPins[i].name[0] = '\0';
+    customPins[i].pin = -1;
+    customPins[i].mode = 0;
+    customPins[i].configured = false;
+  }
+  numCustomPins = 0;
+  
   // Setup built-in LED for status indication
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH); // LED on = ready
@@ -141,6 +161,10 @@ void processCommand(String command) {
   if (command.indexOf("\"type\":\"estop\"") >= 0 || command.indexOf("\"type\": \"estop\"") >= 0) {
     processEStopCommand();
   }
+  // Check if it's a config command (pin configuration)
+  else if (command.indexOf("\"type\":\"config\"") >= 0 || command.indexOf("\"type\": \"config\"") >= 0) {
+    processConfigCommand(command);
+  }
   // Check if it's a motor command (handle both with and without spaces)
   else if (command.indexOf("\"type\":\"motor\"") >= 0 || command.indexOf("\"type\": \"motor\"") >= 0) {
     processMotorCommand(command);
@@ -173,6 +197,190 @@ void processEStopCommand() {
   digitalWrite(LED_BUILTIN, LOW);
   
   Serial.println("E-STOP: All motors stopped, all relays off");
+}
+
+void processConfigCommand(String command) {
+  Serial.println("CONFIG: Processing pin configuration...");
+  
+  // Stop all motors before reconfiguring pins
+  for (int i = 0; i < 2; i++) {
+    motors[i].steps_remaining = 0;
+    motors[i].is_moving = false;
+    digitalWrite(MOTOR_PINS[i][0], LOW);
+  }
+  
+  // Parse motor configuration
+  // Format: "motors":[{"id":1,"step_pin":2,"dir_pin":3},{"id":2,"step_pin":5,"dir_pin":6}]
+  int motorsIndex = command.indexOf("\"motors\"");
+  if (motorsIndex >= 0) {
+    // Find the array start
+    int arrayStart = command.indexOf('[', motorsIndex);
+    int arrayEnd = command.indexOf(']', arrayStart);
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      String motorsArray = command.substring(arrayStart, arrayEnd + 1);
+      
+      // Parse each motor
+      for (int motorId = 1; motorId <= 2; motorId++) {
+        // Find this motor's config
+        String idSearch = "\"id\":" + String(motorId);
+        String idSearchSpace = "\"id\": " + String(motorId);
+        int motorConfigStart = motorsArray.indexOf(idSearch);
+        if (motorConfigStart < 0) {
+          motorConfigStart = motorsArray.indexOf(idSearchSpace);
+        }
+        
+        if (motorConfigStart >= 0) {
+          // Find the object containing this motor
+          int objStart = motorsArray.lastIndexOf('{', motorConfigStart);
+          int objEnd = motorsArray.indexOf('}', motorConfigStart);
+          if (objStart >= 0 && objEnd > objStart) {
+            String motorConfig = motorsArray.substring(objStart, objEnd + 1);
+            
+            int stepPin = extractInt(motorConfig, "step_pin");
+            int dirPin = extractInt(motorConfig, "dir_pin");
+            
+            if (stepPin > 0 && dirPin > 0) {
+              int motorIndex = motorId - 1;
+              
+              // Update pin configuration
+              MOTOR_PINS[motorIndex][0] = stepPin;
+              MOTOR_PINS[motorIndex][1] = dirPin;
+              
+              // Reinitialize pins
+              pinMode(MOTOR_PINS[motorIndex][0], OUTPUT);
+              pinMode(MOTOR_PINS[motorIndex][1], OUTPUT);
+              digitalWrite(MOTOR_PINS[motorIndex][0], LOW);
+              digitalWrite(MOTOR_PINS[motorIndex][1], LOW);
+              
+              // Update step interval
+              motors[motorIndex].step_interval = calculateStepInterval(motor_speeds[motorIndex]);
+              
+              Serial.print("CONFIG: Motor ");
+              Serial.print(motorId);
+              Serial.print(" -> STEP=");
+              Serial.print(stepPin);
+              Serial.print(", DIR=");
+              Serial.println(dirPin);
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Parse relay configuration
+  // Format: "relays":[{"id":1,"pin":54},{"id":2,"pin":55},...]
+  int relaysIndex = command.indexOf("\"relays\"");
+  if (relaysIndex >= 0) {
+    int arrayStart = command.indexOf('[', relaysIndex);
+    int arrayEnd = command.indexOf(']', arrayStart);
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      String relaysArray = command.substring(arrayStart, arrayEnd + 1);
+      
+      for (int relayId = 1; relayId <= 4; relayId++) {
+        String idSearch = "\"id\":" + String(relayId);
+        String idSearchSpace = "\"id\": " + String(relayId);
+        int relayConfigStart = relaysArray.indexOf(idSearch);
+        if (relayConfigStart < 0) {
+          relayConfigStart = relaysArray.indexOf(idSearchSpace);
+        }
+        
+        if (relayConfigStart >= 0) {
+          int objStart = relaysArray.lastIndexOf('{', relayConfigStart);
+          int objEnd = relaysArray.indexOf('}', relayConfigStart);
+          if (objStart >= 0 && objEnd > objStart) {
+            String relayConfig = relaysArray.substring(objStart, objEnd + 1);
+            
+            int pin = extractInt(relayConfig, "pin");
+            if (pin >= 0) {
+              int relayIndex = relayId - 1;
+              
+              // Update pin configuration
+              RELAY_PINS[relayIndex] = pin;
+              
+              // Reinitialize pin
+              pinMode(RELAY_PINS[relayIndex], OUTPUT);
+              digitalWrite(RELAY_PINS[relayIndex], relay_states[relayIndex] ? HIGH : LOW);
+              
+              Serial.print("CONFIG: Relay ");
+              Serial.print(relayId);
+              Serial.print(" -> Pin=");
+              Serial.println(pin);
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Parse custom pins configuration
+  // Format: "custom":[{"name":"sensor1","pin":10,"mode":"input"},...]
+  int customIndex = command.indexOf("\"custom\"");
+  if (customIndex >= 0) {
+    int arrayStart = command.indexOf('[', customIndex);
+    int arrayEnd = command.indexOf(']', arrayStart);
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      String customArray = command.substring(arrayStart + 1, arrayEnd);
+      
+      // Reset custom pins
+      numCustomPins = 0;
+      for (int i = 0; i < MAX_CUSTOM_PINS; i++) {
+        customPins[i].configured = false;
+      }
+      
+      // Parse each custom pin
+      int searchStart = 0;
+      while (numCustomPins < MAX_CUSTOM_PINS) {
+        int objStart = customArray.indexOf('{', searchStart);
+        if (objStart < 0) break;
+        
+        int objEnd = customArray.indexOf('}', objStart);
+        if (objEnd < 0) break;
+        
+        String pinConfig = customArray.substring(objStart, objEnd + 1);
+        searchStart = objEnd + 1;
+        
+        String name = extractString(pinConfig, "name");
+        int pin = extractInt(pinConfig, "pin");
+        String modeStr = extractString(pinConfig, "mode");
+        
+        if (name.length() > 0 && pin >= 0) {
+          // Store custom pin
+          name.toCharArray(customPins[numCustomPins].name, 32);
+          customPins[numCustomPins].pin = pin;
+          
+          // Parse mode
+          if (modeStr == "output") {
+            customPins[numCustomPins].mode = 1;
+            pinMode(pin, OUTPUT);
+            digitalWrite(pin, LOW);
+          } else if (modeStr == "input_pullup") {
+            customPins[numCustomPins].mode = 2;
+            pinMode(pin, INPUT_PULLUP);
+          } else {
+            customPins[numCustomPins].mode = 0;
+            pinMode(pin, INPUT);
+          }
+          
+          customPins[numCustomPins].configured = true;
+          
+          Serial.print("CONFIG: Custom pin '");
+          Serial.print(name);
+          Serial.print("' -> Pin=");
+          Serial.print(pin);
+          Serial.print(", Mode=");
+          Serial.println(modeStr);
+          
+          numCustomPins++;
+        }
+      }
+    }
+  }
+  
+  Serial.println("CONFIG: Pin configuration applied successfully");
+  Serial.print("CONFIG: ");
+  Serial.print(numCustomPins);
+  Serial.println(" custom pins configured");
 }
 
 void processMotorCommand(String command) {

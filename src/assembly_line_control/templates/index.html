@@ -53,6 +53,11 @@
                             title="Reset panel layout to default">
                         RESET VIEW
                     </button>
+                    <button onclick="SettingsManager.openDialog()" 
+                            class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
+                            title="Arduino Pin Settings">
+                        ⚙ SETTINGS
+                    </button>
                 </div>
                 <div class="flex items-center gap-2 border-l border-gray-700 pl-2">
                     <label class="text-xs text-gray-500 whitespace-nowrap">Simulation:</label>
@@ -601,6 +606,95 @@
         </div>
     </div>
 
+    <!-- Settings Modal Dialog -->
+    <div id="settingsModal" class="settings-modal">
+        <div class="settings-dialog">
+            <div class="settings-header">
+                <h2 class="text-lg font-bold text-white">Arduino Pin Settings</h2>
+                <button onclick="SettingsManager.closeDialog()" class="settings-close-btn">&times;</button>
+            </div>
+            
+            <div class="settings-content">
+                <!-- Motor Pins Section -->
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Motor Pins</h3>
+                    <div class="settings-grid">
+                        <div class="settings-group">
+                            <label class="settings-label">Motor 1</label>
+                            <div class="settings-row">
+                                <div class="settings-field">
+                                    <span class="settings-field-label">STEP</span>
+                                    <input type="number" id="motor1StepPin" class="settings-input" min="0" max="99" value="2">
+                                </div>
+                                <div class="settings-field">
+                                    <span class="settings-field-label">DIR</span>
+                                    <input type="number" id="motor1DirPin" class="settings-input" min="0" max="99" value="3">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Motor 2</label>
+                            <div class="settings-row">
+                                <div class="settings-field">
+                                    <span class="settings-field-label">STEP</span>
+                                    <input type="number" id="motor2StepPin" class="settings-input" min="0" max="99" value="5">
+                                </div>
+                                <div class="settings-field">
+                                    <span class="settings-field-label">DIR</span>
+                                    <input type="number" id="motor2DirPin" class="settings-input" min="0" max="99" value="6">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Relay Pins Section -->
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Relay Pins</h3>
+                    <div class="settings-grid settings-grid-4">
+                        <div class="settings-field">
+                            <span class="settings-field-label">Relay 1</span>
+                            <input type="number" id="relay1Pin" class="settings-input" min="0" max="99" value="54">
+                        </div>
+                        <div class="settings-field">
+                            <span class="settings-field-label">Relay 2</span>
+                            <input type="number" id="relay2Pin" class="settings-input" min="0" max="99" value="55">
+                        </div>
+                        <div class="settings-field">
+                            <span class="settings-field-label">Relay 3</span>
+                            <input type="number" id="relay3Pin" class="settings-input" min="0" max="99" value="56">
+                        </div>
+                        <div class="settings-field">
+                            <span class="settings-field-label">Relay 4</span>
+                            <input type="number" id="relay4Pin" class="settings-input" min="0" max="99" value="57">
+                        </div>
+                    </div>
+                    <p class="settings-hint">Note: A0-A3 on Arduino Giga = pins 54-57</p>
+                </div>
+                
+                <!-- Custom Pins Section -->
+                <div class="settings-section">
+                    <h3 class="settings-section-title">
+                        Custom Pins
+                        <button onclick="SettingsManager.addCustomPin()" class="btn-success px-2 py-0.5 text-xs ml-2">+ ADD</button>
+                    </h3>
+                    <div id="customPinsContainer" class="custom-pins-container">
+                        <!-- Custom pins will be added here dynamically -->
+                    </div>
+                    <p class="settings-hint">Add custom pins for sensors, LEDs, or other I/O</p>
+                </div>
+            </div>
+            
+            <div class="settings-footer">
+                <div id="settingsError" class="settings-error"></div>
+                <div class="settings-actions">
+                    <button onclick="SettingsManager.closeDialog()" class="btn-secondary px-4 py-2 text-sm">Cancel</button>
+                    <button onclick="SettingsManager.saveSettings()" class="btn-success px-4 py-2 text-sm">Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- JavaScript Modules -->
     <!-- Inject ROS Bridge URL before config.js loads -->
     <script>
@@ -619,6 +713,7 @@
     <script src="{{ url_for('static', filename='js/storageManager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/executionEngine.js') }}"></script>
     <script src="{{ url_for('static', filename='js/activeBlocksPanel.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/settingsManager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script>
         // Global function for motor speed updates

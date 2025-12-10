@@ -16,8 +16,9 @@ import os
 import threading
 import socket
 from ament_index_python.packages import get_package_share_directory
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
+from pathlib import Path
 
 
 class MotorCommandPublisher(Node):
@@ -251,6 +252,90 @@ def index():
     """Serve the main web interface"""
     rosbridge_url = get_rosbridge_url()
     return render_template('index.html', rosbridge_url=rosbridge_url)
+
+
+def get_settings_path():
+    """Get the path to the pin configuration file."""
+    # Use ~/.assembly_line_os directory for configuration
+    config_dir = Path.home() / '.assembly_line_os'
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / 'pin_config.json'
+
+
+def get_default_settings():
+    """Get default pin configuration."""
+    return {
+        "motors": [
+            {"id": 1, "step_pin": 2, "dir_pin": 3},
+            {"id": 2, "step_pin": 5, "dir_pin": 6}
+        ],
+        "relays": [
+            {"id": 1, "pin": 54},  # A0 on Arduino Giga
+            {"id": 2, "pin": 55},  # A1
+            {"id": 3, "pin": 56},  # A2
+            {"id": 4, "pin": 57}   # A3
+        ],
+        "custom": []
+    }
+
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Get the current pin configuration."""
+    settings_path = get_settings_path()
+    
+    try:
+        if settings_path.exists():
+            with open(settings_path, 'r') as f:
+                config = json.load(f)
+            return jsonify(config)
+        else:
+            # Return defaults if no config file exists
+            return jsonify(get_default_settings())
+    except Exception as e:
+        print(f"Error reading settings: {e}")
+        return jsonify(get_default_settings())
+
+
+@app.route('/api/settings', methods=['POST'])
+def save_settings():
+    """Save the pin configuration."""
+    settings_path = get_settings_path()
+    
+    try:
+        config = request.get_json()
+        
+        if not config:
+            return jsonify({"error": "No configuration provided"}), 400
+        
+        # Validate required fields
+        if 'motors' not in config or 'relays' not in config:
+            return jsonify({"error": "Invalid configuration: missing motors or relays"}), 400
+        
+        # Save to file
+        with open(settings_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        print(f"Pin configuration saved to {settings_path}")
+        
+        # Notify ROS node about config change (if available)
+        if ros_node:
+            try:
+                # Publish config update to a topic for arduino_controller to pick up
+                msg = String()
+                msg.data = json.dumps({"type": "config_update", "config": config})
+                if hasattr(ros_node, 'sequence_pub'):
+                    ros_node.sequence_pub.publish(msg)
+            except Exception as e:
+                print(f"Warning: Could not notify ROS about config update: {e}")
+        
+        return jsonify({"success": True, "message": "Settings saved successfully"})
+    
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"Invalid JSON: {e}"}), 400
+    except Exception as e:
+        print(f"Error saving settings: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 def main():
