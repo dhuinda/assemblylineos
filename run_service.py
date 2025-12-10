@@ -91,15 +91,68 @@ def git_pull(workspace_path):
             print("Working tree has uncommitted changes, skipping git pull")
             return
         
-        # Fetch and pull
-        print("Pulling latest changes from git...")
-        subprocess.run(['git', 'fetch'], cwd=workspace_path, check=False)
-        subprocess.run(['git', 'pull'], cwd=workspace_path, check=False)
-        print("✓ Git pull completed")
+        # Get current commit hash before pull
+        before_hash = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=workspace_path,
+            capture_output=True,
+            text=True,
+            check=True
+        ).stdout.strip()
+        
+        # Fetch latest from remote
+        print("Fetching latest changes from git...")
+        fetch_result = subprocess.run(
+            ['git', 'fetch'],
+            cwd=workspace_path,
+            capture_output=True,
+            text=True
+        )
+        if fetch_result.returncode != 0:
+            print(f"⚠ Warning: Git fetch failed: {fetch_result.stderr.strip()}")
+            return
+        
+        # Pull changes
+        print("Pulling latest changes...")
+        pull_result = subprocess.run(
+            ['git', 'pull'],
+            cwd=workspace_path,
+            capture_output=True,
+            text=True
+        )
+        if pull_result.returncode != 0:
+            print(f"⚠ Warning: Git pull failed: {pull_result.stderr.strip()}")
+            return
+        
+        # Get commit hash after pull
+        after_hash = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=workspace_path,
+            capture_output=True,
+            text=True,
+            check=True
+        ).stdout.strip()
+        
+        # Report what happened
+        if before_hash == after_hash:
+            print("✓ Already up-to-date")
+        else:
+            print(f"✓ Updated from {before_hash[:7]} to {after_hash[:7]}")
+            # Show what changed
+            log_result = subprocess.run(
+                ['git', 'log', '--oneline', f'{before_hash}..{after_hash}'],
+                cwd=workspace_path,
+                capture_output=True,
+                text=True
+            )
+            if log_result.stdout.strip():
+                print("  Changes pulled:")
+                for line in log_result.stdout.strip().split('\n'):
+                    print(f"    - {line}")
     except subprocess.CalledProcessError as e:
-        print(f"Warning: Git operations failed: {e}")
+        print(f"⚠ Warning: Git operations failed: {e}")
     except Exception as e:
-        print(f"Warning: Git pull error: {e}")
+        print(f"⚠ Warning: Git pull error: {e}")
 
 
 def colcon_build(workspace_path, ros_distro):
