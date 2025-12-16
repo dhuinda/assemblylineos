@@ -358,6 +358,207 @@ def reconnect_arduino():
         return jsonify({"error": str(e)}), 500
 
 
+# ============================================================================
+# Project Management API
+# ============================================================================
+
+def get_projects_dir():
+    """Get the path to the projects directory."""
+    config_dir = Path.home() / '.assembly_line_os' / 'projects'
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+def sanitize_project_name(name):
+    """Sanitize project name for filesystem use."""
+    # Remove invalid characters and limit length
+    import re
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', name)
+    sanitized = sanitized.strip('. ')
+    return sanitized[:100] if sanitized else 'untitled'
+
+
+@app.route('/api/projects', methods=['GET'])
+def list_projects():
+    """List all saved projects with their metadata."""
+    try:
+        projects_dir = get_projects_dir()
+        projects = []
+        
+        for project_file in projects_dir.glob('*.json'):
+            try:
+                with open(project_file, 'r') as f:
+                    data = json.load(f)
+                    projects.append({
+                        'id': project_file.stem,
+                        'name': data.get('name', project_file.stem),
+                        'description': data.get('description', ''),
+                        'timestamp': data.get('timestamp', ''),
+                        'version': data.get('version', ''),
+                        'blockCount': len(data.get('blocks', [])),
+                        'workflowCount': len(data.get('workflows', []))
+                    })
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Error reading project {project_file}: {e}")
+                continue
+        
+        # Sort by timestamp (most recent first)
+        projects.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        return jsonify({'projects': projects})
+    except Exception as e:
+        print(f"Error listing projects: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/projects/<project_id>', methods=['GET'])
+def get_project(project_id):
+    """Load a specific project by ID."""
+    try:
+        projects_dir = get_projects_dir()
+        sanitized_id = sanitize_project_name(project_id)
+        project_file = projects_dir / f'{sanitized_id}.json'
+        
+        if not project_file.exists():
+            return jsonify({'error': 'Project not found'}), 404
+        
+        with open(project_file, 'r') as f:
+            data = json.load(f)
+        
+        return jsonify(data)
+    except json.JSONDecodeError as e:
+        return jsonify({'error': f'Invalid project file: {e}'}), 500
+    except Exception as e:
+        print(f"Error loading project {project_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/projects', methods=['POST'])
+def save_project():
+    """Save a project (create new or update existing)."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No project data provided'}), 400
+        
+        project_name = data.get('name', 'untitled').strip()
+        if not project_name:
+            return jsonify({'error': 'Project name is required'}), 400
+        
+        # Generate project ID from name
+        project_id = sanitize_project_name(project_name)
+        
+        # Add metadata
+        data['name'] = project_name
+        data['timestamp'] = json.dumps({})[:-1]  # Placeholder, will be set properly
+        import datetime
+        data['timestamp'] = datetime.datetime.now().isoformat()
+        
+        projects_dir = get_projects_dir()
+        project_file = projects_dir / f'{project_id}.json'
+        
+        # Check if overwriting existing project
+        is_new = not project_file.exists()
+        
+        with open(project_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        print(f"Project '{project_name}' saved to {project_file}")
+        
+        return jsonify({
+            'success': True,
+            'id': project_id,
+            'name': project_name,
+            'isNew': is_new,
+            'message': f"Project '{project_name}' saved successfully"
+        })
+    except Exception as e:
+        print(f"Error saving project: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/projects/<project_id>', methods=['DELETE'])
+def delete_project(project_id):
+    """Delete a project by ID."""
+    try:
+        projects_dir = get_projects_dir()
+        sanitized_id = sanitize_project_name(project_id)
+        project_file = projects_dir / f'{sanitized_id}.json'
+        
+        if not project_file.exists():
+            return jsonify({'error': 'Project not found'}), 404
+        
+        # Get project name before deletion for response
+        project_name = sanitized_id
+        try:
+            with open(project_file, 'r') as f:
+                data = json.load(f)
+                project_name = data.get('name', sanitized_id)
+        except:
+            pass
+        
+        project_file.unlink()
+        print(f"Project '{project_name}' deleted")
+        
+        return jsonify({
+            'success': True,
+            'message': f"Project '{project_name}' deleted successfully"
+        })
+    except Exception as e:
+        print(f"Error deleting project {project_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/projects/<project_id>/rename', methods=['POST'])
+def rename_project(project_id):
+    """Rename a project."""
+    try:
+        data = request.get_json()
+        new_name = data.get('name', '').strip()
+        
+        if not new_name:
+            return jsonify({'error': 'New name is required'}), 400
+        
+        projects_dir = get_projects_dir()
+        old_sanitized_id = sanitize_project_name(project_id)
+        new_sanitized_id = sanitize_project_name(new_name)
+        
+        old_file = projects_dir / f'{old_sanitized_id}.json'
+        new_file = projects_dir / f'{new_sanitized_id}.json'
+        
+        if not old_file.exists():
+            return jsonify({'error': 'Project not found'}), 404
+        
+        if new_file.exists() and old_file != new_file:
+            return jsonify({'error': 'A project with that name already exists'}), 409
+        
+        # Load, update name, and save to new location
+        with open(old_file, 'r') as f:
+            project_data = json.load(f)
+        
+        project_data['name'] = new_name
+        import datetime
+        project_data['timestamp'] = datetime.datetime.now().isoformat()
+        
+        with open(new_file, 'w') as f:
+            json.dump(project_data, f, indent=2)
+        
+        # Remove old file if name changed
+        if old_file != new_file:
+            old_file.unlink()
+        
+        return jsonify({
+            'success': True,
+            'id': new_sanitized_id,
+            'name': new_name,
+            'message': f"Project renamed to '{new_name}'"
+        })
+    except Exception as e:
+        print(f"Error renaming project {project_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 def main():
     """Start the web server"""
     global rosbridge_host, rosbridge_port

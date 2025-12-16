@@ -25,7 +25,7 @@ const App = {
         UIUtils.showPauseOverlay(false);
         
         // Update the workspace UI
-        StorageManager.updateWorkspaceUI();
+        StorageManager.updateProjectUI();
         
         // Set up event handlers
         this.attachEventHandlers();
@@ -37,12 +37,338 @@ const App = {
      * Set up global event handlers
      */
     attachEventHandlers() {
-        // The resume button is handled directly in the overlay HTML
-        // The overlay gets created dynamically when we pause
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl/Cmd + S to save
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                quickSaveProject();
+            }
+            // Ctrl/Cmd + O to open projects
+            if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+                e.preventDefault();
+                ProjectDialog.open();
+            }
+            // Escape to close dialogs
+            if (e.key === 'Escape') {
+                ProjectDialog.close();
+            }
+        });
     }
 };
 
-// These functions are called directly from the HTML buttons
+/**
+ * Project Dialog Manager
+ */
+const ProjectDialog = {
+    isOpen: false,
+    currentTab: 'browse',
+    
+    /**
+     * Open the project dialog
+     */
+    async open() {
+        const modal = document.getElementById('projectModal');
+        if (modal) {
+            modal.classList.add('visible');
+            this.isOpen = true;
+            this.switchTab('browse');
+            await this.refreshProjectList();
+            this.updateSavePanel();
+        }
+    },
+    
+    /**
+     * Close the project dialog
+     */
+    close() {
+        const modal = document.getElementById('projectModal');
+        if (modal) {
+            modal.classList.remove('visible');
+            this.isOpen = false;
+            this.clearError();
+        }
+    },
+    
+    /**
+     * Switch between tabs
+     */
+    switchTab(tabName) {
+        this.currentTab = tabName;
+        
+        // Hide all panels
+        document.querySelectorAll('.project-panel').forEach(panel => {
+            panel.classList.add('hidden');
+        });
+        
+        // Remove active from all tabs
+        document.querySelectorAll('.project-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        
+        // Show selected panel
+        const panel = document.getElementById(`projectPanel-${tabName}`);
+        if (panel) {
+            panel.classList.remove('hidden');
+        }
+        
+        // Activate tab
+        const tab = document.getElementById(`projectTab-${tabName}`);
+        if (tab) {
+            tab.classList.add('active');
+        }
+        
+        // Update content based on tab
+        if (tabName === 'save') {
+            this.updateSavePanel();
+        }
+        
+        this.clearError();
+    },
+    
+    /**
+     * Refresh the project list
+     */
+    async refreshProjectList() {
+        const listEl = document.getElementById('projectList');
+        if (!listEl) return;
+        
+        // Show loading
+        listEl.innerHTML = `
+            <div class="project-loading">
+                <div class="project-loading-spinner"></div>
+                <span>Loading projects...</span>
+            </div>
+        `;
+        
+        try {
+            const projects = await StorageManager.fetchProjects();
+            this.renderProjectList(projects);
+        } catch (error) {
+            listEl.innerHTML = `
+                <div class="project-empty">
+                    <div class="project-empty-text">Failed to load projects</div>
+                    <div class="project-empty-hint">${error.message}</div>
+                </div>
+            `;
+        }
+    },
+    
+    /**
+     * Render the project list
+     */
+    renderProjectList(projects) {
+        const listEl = document.getElementById('projectList');
+        if (!listEl) return;
+        
+        if (!projects || projects.length === 0) {
+            listEl.innerHTML = `
+                <div class="project-empty">
+                    <div class="project-empty-text">No projects yet</div>
+                    <div class="project-empty-hint">Create your first project to get started</div>
+                </div>
+            `;
+            return;
+        }
+        
+        const currentProject = StorageManager.getCurrentProject();
+        
+        listEl.innerHTML = projects.map(project => {
+            const isCurrent = currentProject && currentProject.id === project.id;
+            const date = project.timestamp ? new Date(project.timestamp).toLocaleDateString() : 'Unknown';
+            const time = project.timestamp ? new Date(project.timestamp).toLocaleTimeString() : '';
+            
+            return `
+                <div class="project-item ${isCurrent ? 'current' : ''}" data-project-id="${project.id}">
+                    <div class="project-item-info">
+                        <div class="project-item-name">${this.escapeHtml(project.name)}</div>
+                        ${project.description ? `<div class="project-item-desc">${this.escapeHtml(project.description)}</div>` : ''}
+                        <div class="project-item-meta">
+                            <span>${date} ${time}</span>
+                            <span>${project.blockCount || 0} blocks</span>
+                            <span>${project.workflowCount || 0} workflows</span>
+                        </div>
+                    </div>
+                    <div class="project-item-actions">
+                        <button class="project-item-btn load" onclick="ProjectDialog.loadProject('${project.id}')">
+                            ${isCurrent ? 'CURRENT' : 'LOAD'}
+                        </button>
+                        <button class="project-item-btn delete" onclick="ProjectDialog.deleteProject('${project.id}', event)">
+                            DELETE
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    },
+    
+    /**
+     * Filter projects by search term
+     */
+    filterProjects() {
+        const searchInput = document.getElementById('projectSearchInput');
+        const searchTerm = (searchInput?.value || '').toLowerCase();
+        
+        const projects = StorageManager.getAllProjects();
+        const filtered = projects.filter(p => {
+            return p.name.toLowerCase().includes(searchTerm) ||
+                   (p.description || '').toLowerCase().includes(searchTerm);
+        });
+        
+        this.renderProjectList(filtered);
+    },
+    
+    /**
+     * Update the save panel with current project info
+     */
+    updateSavePanel() {
+        const currentProject = StorageManager.getCurrentProject();
+        
+        const currentNameEl = document.getElementById('saveCurrentName');
+        const nameInput = document.getElementById('saveProjectName');
+        const descInput = document.getElementById('saveProjectDescription');
+        
+        if (currentNameEl) {
+            currentNameEl.textContent = currentProject?.name || 'No project loaded';
+        }
+        
+        if (nameInput) {
+            nameInput.value = currentProject?.name || '';
+        }
+        
+        if (descInput) {
+            descInput.value = currentProject?.description || '';
+        }
+    },
+    
+    /**
+     * Create a new project
+     */
+    async createNewProject() {
+        const nameInput = document.getElementById('newProjectName');
+        const descInput = document.getElementById('newProjectDescription');
+        
+        const name = nameInput?.value?.trim();
+        const description = descInput?.value?.trim() || '';
+        
+        if (!name) {
+            this.showError('Please enter a project name');
+            nameInput?.focus();
+            return;
+        }
+        
+        try {
+            // Create new empty project
+            await StorageManager.createNew(name, description);
+            
+            // Close dialog
+            this.close();
+            
+            // Clear inputs
+            if (nameInput) nameInput.value = '';
+            if (descInput) descInput.value = '';
+            
+            UIUtils.log(`[PROJECT] Created new project "${name}"`, 'success');
+        } catch (error) {
+            this.showError(error.message);
+        }
+    },
+    
+    /**
+     * Save the current project
+     */
+    async saveProject() {
+        const nameInput = document.getElementById('saveProjectName');
+        const descInput = document.getElementById('saveProjectDescription');
+        
+        const name = nameInput?.value?.trim();
+        const description = descInput?.value?.trim() || '';
+        
+        if (!name) {
+            this.showError('Please enter a project name');
+            nameInput?.focus();
+            return;
+        }
+        
+        try {
+            const success = await StorageManager.save(name, description);
+            
+            if (success) {
+                await this.refreshProjectList();
+                this.updateSavePanel();
+                UIUtils.log(`[PROJECT] Saved project "${name}"`, 'success');
+            }
+        } catch (error) {
+            this.showError(error.message);
+        }
+    },
+    
+    /**
+     * Load a project
+     */
+    async loadProject(projectId) {
+        try {
+            const success = await StorageManager.load(projectId, false);
+            
+            if (success) {
+                this.close();
+            }
+        } catch (error) {
+            this.showError(error.message);
+        }
+    },
+    
+    /**
+     * Delete a project
+     */
+    async deleteProject(projectId, event) {
+        event?.stopPropagation();
+        
+        try {
+            const success = await StorageManager.deleteProject(projectId);
+            
+            if (success) {
+                await this.refreshProjectList();
+            }
+        } catch (error) {
+            this.showError(error.message);
+        }
+    },
+    
+    /**
+     * Show error message
+     */
+    showError(message) {
+        const errorEl = document.getElementById('projectError');
+        if (errorEl) {
+            errorEl.textContent = message;
+        }
+    },
+    
+    /**
+     * Clear error message
+     */
+    clearError() {
+        const errorEl = document.getElementById('projectError');
+        if (errorEl) {
+            errorEl.textContent = '';
+        }
+    },
+    
+    /**
+     * Escape HTML to prevent XSS
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+};
+
+// ============================================
+// Global Functions (called from HTML)
+// ============================================
+
 function startExecution() {
     ExecutionEngine.start();
 }
@@ -51,99 +377,65 @@ function stopExecution() {
     ExecutionEngine.stop();
 }
 
-function saveCurrentWorkspace() {
-    const currentName = StorageManager.getCurrentWorkspace();
-    if (!currentName) {
-        saveWorkspaceAs();
-    } else {
-        StorageManager.save();
+/**
+ * Quick save the current project
+ */
+async function quickSaveProject() {
+    const currentProject = StorageManager.getCurrentProject();
+    
+    if (!currentProject?.id && !currentProject?.name) {
+        // No project, open the save dialog
+        ProjectDialog.open();
+        ProjectDialog.switchTab('save');
+        return;
     }
+    
+    // Save to current project
+    await StorageManager.save();
+}
+
+/**
+ * Open project dialog to browse/create projects
+ */
+function openProjectDialog() {
+    ProjectDialog.open();
+}
+
+// Legacy compatibility functions
+function saveCurrentWorkspace() {
+    quickSaveProject();
 }
 
 function saveWorkspaceAs() {
-    const name = prompt('Enter workspace name:');
-    if (name && name.trim() !== '') {
-        StorageManager.saveAs(name.trim());
-    }
+    ProjectDialog.open();
+    ProjectDialog.switchTab('save');
 }
 
 function loadConfiguration() {
-    const workspaces = StorageManager.getAllWorkspaces();
-    const names = Object.keys(workspaces).sort();
-    
-    if (names.length === 0) {
-        UIUtils.log('[LOAD] No workspaces available', 'error');
-        return;
-    }
-    
-    let message = 'Select workspace to load:\n\n';
-    names.forEach((name, index) => {
-        message += `${index + 1}. ${name}\n`;
-    });
-    
-    const choice = prompt(message + '\nEnter number or name:');
-    if (!choice) return;
-    
-    // First try to interpret it as a number
-    const num = parseInt(choice);
-    if (!isNaN(num) && num >= 1 && num <= names.length) {
-        StorageManager.load(names[num - 1]);
-    } else {
-        // If that didn't work, try it as a name
-        if (names.includes(choice)) {
-            StorageManager.load(choice);
-        } else {
-            UIUtils.log('[LOAD] Invalid workspace name', 'error');
-        }
-    }
+    ProjectDialog.open();
+    ProjectDialog.switchTab('browse');
 }
 
 function loadWorkspaceFromSelect() {
-    const select = document.getElementById('workspaceList');
-    if (select && select.value) {
-        StorageManager.load(select.value, true);
-    }
+    // Legacy - no longer used
 }
 
 function deleteCurrentWorkspace() {
-    const currentName = StorageManager.getCurrentWorkspace();
-    if (!currentName) {
-        UIUtils.log('[DELETE] No workspace selected', 'error');
-        return;
-    }
-    
-    if (StorageManager.deleteWorkspace(currentName)) {
-        // Clear workspace after deletion
-        WorkflowManager.blocks.clear();
-        WorkflowManager.workflows.clear();
-        BlockConnector.connections.clear();
-        WorkflowManager.blockIdCounter = 0;
-        WorkflowManager.workflowIdCounter = 0;
-        WorkflowManager.renderAll();
+    const currentProject = StorageManager.getCurrentProject();
+    if (currentProject?.id) {
+        StorageManager.deleteProject(currentProject.id);
+    } else {
+        UIUtils.log('[DELETE] No project to delete', 'error');
     }
 }
 
 function newWorkspace() {
-    if (!UIUtils.confirm('Create a new workspace? Current unsaved changes will be lost.')) {
-        return;
-    }
-    
-    // Clear current workspace
-    StorageManager.setCurrentWorkspace(null);
-    WorkflowManager.blocks.clear();
-    WorkflowManager.workflows.clear();
-    BlockConnector.connections.clear();
-    WorkflowManager.blockIdCounter = 0;
-    WorkflowManager.workflowIdCounter = 0;
-    WorkflowManager.renderAll();
-    
-    StorageManager.updateWorkspaceUI();
-    UIUtils.log('[WORKSPACE] New workspace created', 'success');
+    ProjectDialog.open();
+    ProjectDialog.switchTab('new');
 }
 
-// Old name for saveCurrentWorkspace - kept for backward compatibility
 function saveConfiguration() {
-    saveCurrentWorkspace();
+    quickSaveProject();
 }
 
 function clearWorkspace() {

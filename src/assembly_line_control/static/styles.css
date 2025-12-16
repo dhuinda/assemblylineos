@@ -1309,3 +1309,437 @@ button:disabled {
     }
 }
 
+/* ============================================
+   Project Dialog Modal Styles
+   ============================================ */
+
+.project-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+}
+
+.project-modal.visible {
+    display: flex;
+}
+
+.project-dialog {
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+}
+
+.project-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid #2a2a2a;
+    background: #151515;
+    border-radius: 12px 12px 0 0;
+}
+
+.project-close-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    color: #888;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.project-close-btn:hover {
+    background: #dc2626;
+    border-color: #dc2626;
+    color: white;
+    transform: scale(1.05);
+}
+
+.project-content {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Project Tabs */
+.project-tabs {
+    display: flex;
+    border-bottom: 1px solid #2a2a2a;
+    background: #151515;
+    flex-shrink: 0;
+}
+
+.project-tab {
+    flex: 1;
+    padding: 12px 16px;
+    background: transparent;
+    border: none;
+    color: #888;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    border-bottom: 2px solid transparent;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.project-tab:hover {
+    color: #d4d4d4;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.project-tab.active {
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.1);
+}
+
+/* Project Panels */
+.project-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+.project-panel.hidden {
+    display: none;
+}
+
+/* Project Search */
+.project-search {
+    margin-bottom: 16px;
+}
+
+.project-search-input {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 13px;
+    background: #0a0a0a;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    color: #d4d4d4;
+    transition: all 0.15s;
+}
+
+.project-search-input:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    outline: none;
+}
+
+.project-search-input::placeholder {
+    color: #666;
+}
+
+/* Project List */
+.project-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.project-list:empty::after {
+    content: 'No projects found';
+    font-size: 13px;
+    color: #666;
+    text-align: center;
+    padding: 40px 20px;
+}
+
+/* Project Item */
+.project-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #252525;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.project-item:hover {
+    background: #2a2a2a;
+    border-color: #4a4a4a;
+}
+
+.project-item.current {
+    border-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.project-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.project-item-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #d4d4d4;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.project-item-desc {
+    font-size: 11px;
+    color: #888;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+}
+
+.project-item-meta {
+    font-size: 10px;
+    color: #666;
+    display: flex;
+    gap: 8px;
+}
+
+.project-item-meta span:not(:last-child)::after {
+    content: '·';
+    margin-left: 8px;
+    color: #444;
+}
+
+.project-item-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.project-item-btn {
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+}
+
+.project-item-btn.load {
+    background: #3b82f6;
+    color: white;
+}
+
+.project-item-btn.load:hover {
+    background: #2563eb;
+    transform: scale(1.02);
+}
+
+.project-item-btn.delete {
+    background: transparent;
+    color: #666;
+    border: 1px solid #3a3a3a;
+}
+
+.project-item-btn.delete:hover {
+    background: #dc2626;
+    color: white;
+    border-color: #dc2626;
+}
+
+/* Project Form */
+.project-form {
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.project-form-group {
+    margin-bottom: 20px;
+}
+
+.project-form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #d4d4d4;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.project-form-input,
+.project-form-textarea {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 14px;
+    background: #0a0a0a;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    color: #d4d4d4;
+    transition: all 0.15s;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.project-form-input:focus,
+.project-form-textarea:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    outline: none;
+}
+
+.project-form-input::placeholder,
+.project-form-textarea::placeholder {
+    color: #555;
+}
+
+.project-form-textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+.project-form-hint {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 6px;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.project-form-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 24px;
+}
+
+.project-current-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 16px;
+    background: #252525;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+/* Project Footer */
+.project-footer {
+    padding: 16px 20px;
+    border-top: 1px solid #2a2a2a;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: #151515;
+    border-radius: 0 0 12px 12px;
+}
+
+.project-error {
+    font-size: 12px;
+    color: #dc2626;
+    text-align: center;
+    min-height: 18px;
+}
+
+/* Empty state */
+.project-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: #666;
+    border: 1px dashed #3a3a3a;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+.project-empty-text {
+    font-size: 14px;
+    margin-bottom: 8px;
+    color: #888;
+}
+
+.project-empty-hint {
+    font-size: 12px;
+    color: #555;
+}
+
+/* Loading state */
+.project-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: #888;
+}
+
+.project-loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #3a3a3a;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 12px;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+    .project-dialog {
+        width: 95%;
+        max-height: 90vh;
+    }
+    
+    .project-tabs {
+        flex-wrap: wrap;
+    }
+    
+    .project-tab {
+        flex: 1 1 auto;
+        min-width: 33%;
+        padding: 10px 8px;
+        font-size: 10px;
+    }
+    
+    .project-item {
+        flex-wrap: wrap;
+    }
+    
+    .project-item-actions {
+        width: 100%;
+        justify-content: flex-end;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #3a3a3a;
+    }
+}
+

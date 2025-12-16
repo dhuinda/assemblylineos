@@ -1,46 +1,59 @@
 /**
- * Storage Manager - Handles saving and loading configurations with multiple workspaces
+ * Storage Manager - Handles saving and loading projects to/from server
+ * Projects are stored server-side for persistence across devices/sessions
  */
 const StorageManager = {
-    currentWorkspace: null, // Current workspace name
+    currentProject: null, // Current project metadata
     autoSaveTimer: null, // Timer for debounced auto-save
-    autoSaveDelay: 500, // Delay in ms for auto-save debouncing
+    autoSaveDelay: 1000, // Delay in ms for auto-save debouncing
+    projectsCache: [], // Cache of project list
+    isLoading: false, // Prevent concurrent operations
     
     /**
-     * Get all saved workspaces
-     * @returns {Object} - Map of workspace names to metadata
+     * Fetch all projects from server
+     * @returns {Promise<Array>} - List of project metadata
      */
-    getAllWorkspaces() {
+    async fetchProjects() {
         try {
-            const workspacesData = localStorage.getItem(Config.WORKSPACES_KEY);
-            if (!workspacesData) return {};
-            return JSON.parse(workspacesData);
+            const response = await fetch('/api/projects');
+            if (!response.ok) {
+                throw new Error(`HTTP error: ${response.status}`);
+            }
+            const data = await response.json();
+            this.projectsCache = data.projects || [];
+            return this.projectsCache;
         } catch (error) {
-            console.error('Failed to get workspaces:', error);
-            return {};
+            console.error('Failed to fetch projects:', error);
+            UIUtils.log('[ERROR] Failed to fetch projects: ' + error.message, 'error');
+            return [];
         }
     },
     
     /**
-     * Get current workspace name
-     * @returns {string|null} - Current workspace name
+     * Get all saved projects (cached version)
+     * @returns {Array} - List of project metadata
      */
-    getCurrentWorkspace() {
-        if (!this.currentWorkspace) {
-            const saved = localStorage.getItem(Config.CURRENT_WORKSPACE_KEY);
-            this.currentWorkspace = saved || null;
-        }
-        return this.currentWorkspace;
+    getAllProjects() {
+        return this.projectsCache;
     },
     
     /**
-     * Set current workspace name
-     * @param {string} name - Workspace name
+     * Get current project info
+     * @returns {Object|null} - Current project metadata
      */
-    setCurrentWorkspace(name) {
-        this.currentWorkspace = name;
-        if (name) {
-            localStorage.setItem(Config.CURRENT_WORKSPACE_KEY, name);
+    getCurrentProject() {
+        return this.currentProject;
+    },
+    
+    /**
+     * Set current project
+     * @param {Object} project - Project metadata {id, name, description}
+     */
+    setCurrentProject(project) {
+        this.currentProject = project;
+        // Also save to localStorage for quick reload
+        if (project) {
+            localStorage.setItem(Config.CURRENT_WORKSPACE_KEY, JSON.stringify(project));
         } else {
             localStorage.removeItem(Config.CURRENT_WORKSPACE_KEY);
         }
@@ -83,100 +96,98 @@ const StorageManager = {
             blockIdCounter: WorkflowManager.blockIdCounter,
             workflowIdCounter: WorkflowManager.workflowIdCounter,
             motorSpeeds: MotorSpeedManager.speeds,
-            version: Config.VERSION,
-            timestamp: new Date().toISOString()
+            version: Config.VERSION
         };
     },
     
     /**
-     * Save current workspace
-     * @param {string} workspaceName - Workspace name (optional, uses current if not provided)
-     * @returns {boolean} - Success status
+     * Save current project to server
+     * @param {string} projectName - Project name (optional, uses current if not provided)
+     * @param {string} description - Project description
+     * @returns {Promise<boolean>} - Success status
      */
-    save(workspaceName = null) {
+    async save(projectName = null, description = null) {
+        if (this.isLoading) {
+            UIUtils.log('[SAVE] Operation in progress, please wait...', 'warning');
+            return false;
+        }
+        
         try {
-            const name = workspaceName || this.getCurrentWorkspace() || 'default';
+            this.isLoading = true;
+            const name = projectName || (this.currentProject?.name) || 'Untitled Project';
+            const desc = description !== null ? description : (this.currentProject?.description || '');
+            
             const config = this.buildConfig();
+            config.name = name;
+            config.description = desc;
             
-            // Get existing workspaces
-            const workspaces = this.getAllWorkspaces();
+            const response = await fetch('/api/projects', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config)
+            });
             
-            // Update workspace
-            workspaces[name] = {
-                name: name,
-                timestamp: new Date().toISOString(),
-                version: Config.VERSION
-            };
+            const result = await response.json();
             
-            // Save workspace data
-            localStorage.setItem(`${Config.WORKSPACES_KEY}_${name}`, JSON.stringify(config));
-            
-            // Save workspace list
-            localStorage.setItem(Config.WORKSPACES_KEY, JSON.stringify(workspaces));
-            
-            // Set as current if not already
-            if (!this.getCurrentWorkspace()) {
-                this.setCurrentWorkspace(name);
+            if (!response.ok) {
+                throw new Error(result.error || 'Failed to save project');
             }
             
+            // Update current project
+            this.setCurrentProject({
+                id: result.id,
+                name: result.name,
+                description: desc
+            });
+            
+            // Save motor speeds locally
             MotorSpeedManager.save();
-            UIUtils.log(`[SAVE] Workspace "${name}" saved`, 'success');
-            this.updateWorkspaceUI();
+            
+            UIUtils.log(`[SAVE] Project "${name}" saved to server`, 'success');
+            this.updateProjectUI();
+            
+            // Refresh projects cache
+            await this.fetchProjects();
+            
             return true;
         } catch (error) {
-            UIUtils.log('[ERROR] Failed to save workspace: ' + error, 'error');
+            UIUtils.log('[ERROR] Failed to save project: ' + error.message, 'error');
+            console.error('Save error:', error);
             return false;
+        } finally {
+            this.isLoading = false;
         }
     },
     
     /**
-     * Save workspace with a new name (Save As)
-     * @param {string} workspaceName - New workspace name
-     * @returns {boolean} - Success status
+     * Load project from server
+     * @param {string} projectId - Project ID to load
+     * @param {boolean} confirmFirst - Whether to ask for confirmation
+     * @returns {Promise<boolean>} - Success status
      */
-    saveAs(workspaceName) {
-        if (!workspaceName || workspaceName.trim() === '') {
-            UIUtils.log('[ERROR] Workspace name cannot be empty', 'error');
+    async load(projectId, confirmFirst = true) {
+        if (this.isLoading) {
+            UIUtils.log('[LOAD] Operation in progress, please wait...', 'warning');
             return false;
         }
         
-        const name = workspaceName.trim();
-        const workspaces = this.getAllWorkspaces();
-        
-        if (workspaces[name] && !UIUtils.confirm(`Workspace "${name}" already exists. Overwrite?`)) {
-            return false;
-        }
-        
-        this.setCurrentWorkspace(name);
-        return this.save(name);
-    },
-    
-    /**
-     * Load workspace
-     * @param {string} workspaceName - Workspace name to load
-     * @param {boolean} confirmFirst - Whether to ask for confirmation first
-     * @returns {boolean} - Success status
-     */
-    load(workspaceName = null, confirmFirst = true) {
         try {
-            const name = workspaceName || this.getCurrentWorkspace();
+            this.isLoading = true;
             
-            if (!name) {
-                UIUtils.log('[LOAD] No workspace selected', 'error');
+            if (confirmFirst && !UIUtils.confirm(`Load project? This will replace the current workspace.`)) {
                 return false;
             }
             
-            const saved = localStorage.getItem(`${Config.WORKSPACES_KEY}_${name}`);
-            if (!saved) {
-                UIUtils.log(`[LOAD] Workspace "${name}" not found`, 'error');
-                return false;
+            const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
+            
+            if (!response.ok) {
+                const result = await response.json();
+                throw new Error(result.error || 'Failed to load project');
             }
             
-            const config = JSON.parse(saved);
-            
-            if (confirmFirst && !UIUtils.confirm(`Load workspace "${name}"? This will replace the current setup.`)) {
-                return false;
-            }
+            const config = await response.json();
             
             // Stop any active execution
             ExecutionEngine.stop();
@@ -192,7 +203,6 @@ const StorageManager = {
                 config.blocks.forEach(block => {
                     const blockId = parseInt(block.id) || 0;
                     if (blockId === 0) {
-                        UIUtils.log('[LOAD] Skipping block with invalid ID', 'warning');
                         return;
                     }
                     
@@ -222,16 +232,11 @@ const StorageManager = {
                 config.workflows.forEach(workflow => {
                     const workflowId = parseInt(workflow.id) || 0;
                     if (workflowId === 0) {
-                        UIUtils.log('[LOAD] Skipping workflow with invalid ID', 'warning');
                         return;
                     }
                     
                     const blockIds = (workflow.blocks || []).map(id => parseInt(id)).filter(id => {
-                        if (!id || !WorkflowManager.blocks.has(id)) {
-                            UIUtils.log(`[LOAD] Workflow ${workflowId} references non-existent block ${id}`, 'warning');
-                            return false;
-                        }
-                        return true;
+                        return id && WorkflowManager.blocks.has(id);
                     });
                     
                     WorkflowManager.workflows.set(workflowId, {
@@ -251,7 +256,6 @@ const StorageManager = {
                 config.connections.forEach(conn => {
                     const blockId = parseInt(conn.id) || 0;
                     if (blockId === 0 || !WorkflowManager.blocks.has(blockId)) {
-                        UIUtils.log(`[LOAD] Skipping connection for non-existent block ${blockId}`, 'warning');
                         return;
                     }
                     
@@ -260,13 +264,7 @@ const StorageManager = {
                         if (!Array.isArray(next)) {
                             next = [next];
                         }
-                        next = next.map(id => parseInt(id)).filter(id => {
-                            if (!id || !WorkflowManager.blocks.has(id)) {
-                                UIUtils.log(`[LOAD] Connection from block ${blockId} references non-existent block ${id}`, 'warning');
-                                return false;
-                            }
-                            return true;
-                        });
+                        next = next.map(id => parseInt(id)).filter(id => id && WorkflowManager.blocks.has(id));
                         if (next.length === 0) {
                             next = null;
                         }
@@ -276,7 +274,6 @@ const StorageManager = {
                     if (prev !== null && prev !== undefined) {
                         prev = parseInt(prev);
                         if (!prev || !WorkflowManager.blocks.has(prev)) {
-                            UIUtils.log(`[LOAD] Connection from block ${blockId} references non-existent prev block ${prev}`, 'warning');
                             prev = null;
                         }
                     }
@@ -295,12 +292,11 @@ const StorageManager = {
                 });
             }
             
-            // Validate and fix workflow references in blocks
+            // Validate workflow references
             WorkflowManager.blocks.forEach((block, blockId) => {
                 if (block.workflowId) {
                     const workflowId = parseInt(block.workflowId);
                     if (!WorkflowManager.workflows.has(workflowId)) {
-                        UIUtils.log(`[LOAD] Block ${blockId} references non-existent workflow ${workflowId}`, 'warning');
                         block.workflowId = undefined;
                     } else {
                         const workflow = WorkflowManager.workflows.get(workflowId);
@@ -313,18 +309,13 @@ const StorageManager = {
                 if (block.triggeredBy) {
                     const triggeredById = parseInt(block.triggeredBy);
                     if (!WorkflowManager.blocks.has(triggeredById)) {
-                        UIUtils.log(`[LOAD] Block ${blockId} references non-existent triggeredBy block ${triggeredById}`, 'warning');
                         block.triggeredBy = undefined;
                     }
                 }
                 
                 if (block.triggersWorkflows && Array.isArray(block.triggersWorkflows)) {
                     block.triggersWorkflows = block.triggersWorkflows.map(wid => parseInt(wid)).filter(wid => {
-                        if (!wid || !WorkflowManager.workflows.has(wid)) {
-                            UIUtils.log(`[LOAD] Block ${blockId} references non-existent workflow ${wid}`, 'warning');
-                            return false;
-                        }
-                        return true;
+                        return wid && WorkflowManager.workflows.has(wid);
                     });
                 }
             });
@@ -345,130 +336,153 @@ const StorageManager = {
                 BlockConnector.importCustomPaths(config.customPaths);
             }
             
-            // Set as current workspace
-            this.setCurrentWorkspace(name);
+            // Set as current project
+            this.setCurrentProject({
+                id: projectId,
+                name: config.name || projectId,
+                description: config.description || ''
+            });
             
             // Re-render everything
             WorkflowManager.renderAll();
             
-            UIUtils.log(`[LOAD] Workspace "${name}" loaded`, 'success');
-            this.updateWorkspaceUI();
+            UIUtils.log(`[LOAD] Project "${config.name || projectId}" loaded`, 'success');
+            this.updateProjectUI();
             return true;
         } catch (error) {
-            UIUtils.log('[ERROR] Failed to load workspace: ' + error, 'error');
+            UIUtils.log('[ERROR] Failed to load project: ' + error.message, 'error');
             console.error('Load error:', error);
             return false;
+        } finally {
+            this.isLoading = false;
         }
     },
     
     /**
-     * Delete a workspace
-     * @param {string} workspaceName - Workspace name to delete
-     * @returns {boolean} - Success status
+     * Delete a project from server
+     * @param {string} projectId - Project ID to delete
+     * @returns {Promise<boolean>} - Success status
      */
-    deleteWorkspace(workspaceName) {
-        if (!workspaceName) return false;
+    async deleteProject(projectId) {
+        if (!projectId) return false;
         
-        if (!UIUtils.confirm(`Delete workspace "${workspaceName}"? This cannot be undone.`)) {
+        if (!UIUtils.confirm(`Delete this project? This cannot be undone.`)) {
             return false;
         }
         
         try {
-            const workspaces = this.getAllWorkspaces();
-            if (!workspaces[workspaceName]) {
-                UIUtils.log(`[DELETE] Workspace "${workspaceName}" not found`, 'error');
-                return false;
+            const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+                method: 'DELETE'
+            });
+            
+            const result = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(result.error || 'Failed to delete project');
             }
             
-            // Remove from list
-            delete workspaces[workspaceName];
-            localStorage.setItem(Config.WORKSPACES_KEY, JSON.stringify(workspaces));
-            
-            // Remove workspace data
-            localStorage.removeItem(`${Config.WORKSPACES_KEY}_${workspaceName}`);
-            
-            // If it was the current workspace, clear current
-            if (this.getCurrentWorkspace() === workspaceName) {
-                this.setCurrentWorkspace(null);
+            // If it was the current project, clear current
+            if (this.currentProject?.id === projectId) {
+                this.setCurrentProject(null);
             }
             
-            UIUtils.log(`[DELETE] Workspace "${workspaceName}" deleted`, 'success');
-            this.updateWorkspaceUI();
+            UIUtils.log(`[DELETE] ${result.message}`, 'success');
+            
+            // Refresh projects cache
+            await this.fetchProjects();
+            this.updateProjectUI();
+            
             return true;
         } catch (error) {
-            UIUtils.log('[ERROR] Failed to delete workspace: ' + error, 'error');
+            UIUtils.log('[ERROR] Failed to delete project: ' + error.message, 'error');
             return false;
         }
     },
     
     /**
-     * Auto-load from storage on page load
+     * Create a new empty project
+     * @param {string} name - Project name
+     * @param {string} description - Project description
+     * @returns {Promise<boolean>} - Success status
      */
-    loadFromStorage() {
+    async createNew(name = 'Untitled Project', description = '') {
+        // Clear current state
+        WorkflowManager.blocks.clear();
+        WorkflowManager.workflows.clear();
+        BlockConnector.connections.clear();
+        WorkflowManager.blockIdCounter = 0;
+        WorkflowManager.workflowIdCounter = 0;
+        WorkflowManager.renderAll();
+        
+        // Set as new project (not saved yet)
+        this.setCurrentProject({
+            id: null,
+            name: name,
+            description: description,
+            isNew: true
+        });
+        
+        this.updateProjectUI();
+        UIUtils.log(`[NEW] Created new project "${name}"`, 'success');
+        return true;
+    },
+    
+    /**
+     * Auto-load last project or initialize fresh
+     */
+    async loadFromStorage() {
         try {
-            const currentName = this.getCurrentWorkspace();
-            if (currentName) {
-                // Try to load last used workspace
-                const saved = localStorage.getItem(`${Config.WORKSPACES_KEY}_${currentName}`);
-                if (saved) {
-                    // Load without confirmation on page load
-                    this.load(currentName, false);
-                    return;
+            // First fetch projects list
+            await this.fetchProjects();
+            
+            // Try to load last used project from localStorage
+            const savedProject = localStorage.getItem(Config.CURRENT_WORKSPACE_KEY);
+            if (savedProject) {
+                try {
+                    const project = JSON.parse(savedProject);
+                    if (project.id) {
+                        // Try to load this project
+                        const loaded = await this.load(project.id, false);
+                        if (loaded) return;
+                    }
+                } catch (e) {
+                    console.warn('Could not parse saved project:', e);
                 }
             }
             
-            // Fallback: load any available workspace
-            const workspaces = this.getAllWorkspaces();
-            const workspaceNames = Object.keys(workspaces);
-            
-            if (workspaceNames.length > 0) {
-                // Sort by timestamp (most recent first) or alphabetically if no timestamp
-                const sortedNames = workspaceNames.sort((a, b) => {
-                    const aTime = workspaces[a]?.timestamp || '';
-                    const bTime = workspaces[b]?.timestamp || '';
-                    if (aTime && bTime) {
-                        return new Date(bTime) - new Date(aTime);
-                    }
-                    return a.localeCompare(b);
-                });
-                
-                // Load the first available workspace
-                const workspaceToLoad = sortedNames[0];
-                this.setCurrentWorkspace(workspaceToLoad);
-                this.load(workspaceToLoad, false);
-            } else {
-                // No workspace found, start fresh
-                WorkflowManager.blocks.clear();
-                WorkflowManager.workflows.clear();
-                BlockConnector.connections.clear();
-                WorkflowManager.renderAll();
+            // Fallback: load most recent project if available
+            if (this.projectsCache.length > 0) {
+                const mostRecent = this.projectsCache[0];
+                await this.load(mostRecent.id, false);
+                return;
             }
+            
+            // No projects found, start fresh
+            this.createNew();
         } catch (error) {
-            UIUtils.log('[ERROR] Failed to auto-load workspace: ' + error, 'error');
             console.error('Auto-load error:', error);
+            this.createNew();
         }
     },
     
     /**
-     * Auto-save current workspace (debounced for performance)
+     * Auto-save current project (debounced)
      */
     autoSave() {
         if (!Config.AUTO_SAVE_ENABLED) return;
         
-        const currentName = this.getCurrentWorkspace();
-        if (!currentName) return; // Don't auto-save if no workspace is set
+        // Only auto-save if we have a saved project
+        if (!this.currentProject?.id) return;
         
         // Clear existing timer
         if (this.autoSaveTimer) {
             clearTimeout(this.autoSaveTimer);
         }
         
-        // Debounce auto-save to avoid excessive saves during drag operations
-        this.autoSaveTimer = setTimeout(() => {
+        // Debounce auto-save
+        this.autoSaveTimer = setTimeout(async () => {
             try {
-                const config = this.buildConfig();
-                localStorage.setItem(`${Config.WORKSPACES_KEY}_${currentName}`, JSON.stringify(config));
-                MotorSpeedManager.save();
+                await this.save();
             } catch (error) {
                 console.error('Auto-save error:', error);
             }
@@ -477,50 +491,48 @@ const StorageManager = {
     },
     
     /**
-     * Update workspace UI
+     * Update project UI elements
      */
-    updateWorkspaceUI() {
-        const currentName = this.getCurrentWorkspace();
-        const workspaceNameEl = document.getElementById('currentWorkspaceName');
-        if (workspaceNameEl) {
-            workspaceNameEl.textContent = currentName || 'None';
+    updateProjectUI() {
+        const projectNameEl = document.getElementById('currentProjectName');
+        if (projectNameEl) {
+            const name = this.currentProject?.name || 'No Project';
+            const isNew = this.currentProject?.isNew;
+            projectNameEl.textContent = name + (isNew ? ' (unsaved)' : '');
         }
-        
-        // Update workspace list in dropdown
-        this.updateWorkspaceList();
     },
     
-    /**
-     * Update workspace list dropdown
-     */
-    updateWorkspaceList() {
-        const workspaceListEl = document.getElementById('workspaceList');
-        if (!workspaceListEl) return;
-        
-        const workspaces = this.getAllWorkspaces();
-        const currentName = this.getCurrentWorkspace();
-        
-        workspaceListEl.innerHTML = '';
-        
-        if (Object.keys(workspaces).length === 0) {
-            const option = document.createElement('option');
-            option.value = '';
-            option.textContent = 'No workspaces';
-            workspaceListEl.appendChild(option);
-            return;
+    // Legacy compatibility methods
+    getCurrentWorkspace() {
+        return this.currentProject?.name || null;
+    },
+    
+    setCurrentWorkspace(name) {
+        if (name) {
+            this.currentProject = { ...this.currentProject, name };
+        } else {
+            this.currentProject = null;
         }
-        
-        // Sort workspaces by name
-        const sortedNames = Object.keys(workspaces).sort();
-        
-        sortedNames.forEach(name => {
-            const option = document.createElement('option');
-            option.value = name;
-            option.textContent = name;
-            if (name === currentName) {
-                option.selected = true;
-            }
-            workspaceListEl.appendChild(option);
+    },
+    
+    updateWorkspaceUI() {
+        this.updateProjectUI();
+    },
+    
+    updateWorkspaceList() {
+        // No-op for compatibility
+    },
+    
+    getAllWorkspaces() {
+        // Convert projects to workspace format for compatibility
+        const workspaces = {};
+        this.projectsCache.forEach(p => {
+            workspaces[p.name] = {
+                name: p.name,
+                timestamp: p.timestamp,
+                version: p.version
+            };
         });
+        return workspaces;
     }
 };

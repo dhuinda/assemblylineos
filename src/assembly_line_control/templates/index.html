@@ -20,34 +20,26 @@
         <div class="card px-2 py-1 mb-1 flex-shrink-0">
             <div class="flex items-center gap-3 flex-wrap">
                 <h1 class="text-xs font-bold text-white whitespace-nowrap">ASSEMBLY LINE OS</h1>
+                
+                <!-- Project Controls -->
                 <div class="flex items-center gap-2 border-l border-gray-700 pl-2">
-                    <label class="text-xs text-gray-500 whitespace-nowrap">Workspace:</label>
-                    <select id="workspaceList" 
-                            class="px-1.5 py-0.5 text-xs bg-gray-800 text-white border border-gray-600 rounded focus:outline-none focus:border-blue-500 min-w-[120px]"
-                            onchange="loadWorkspaceFromSelect()">
-                        <option value="">Select workspace...</option>
-                    </select>
-                    <span class="text-xs text-gray-500">Current: <span id="currentWorkspaceName" class="text-gray-400 font-mono">None</span></span>
-                </div>
-                <div class="flex items-center gap-1 border-l border-gray-700 pl-2">
-                    <button onclick="newWorkspace()" 
-                            class="btn-secondary px-1.5 py-0.5 text-xs font-medium">
-                        NEW
+                    <button onclick="ProjectDialog.open()" 
+                            class="btn-primary px-2 py-0.5 text-xs font-medium"
+                            title="Open project manager (Ctrl+O)">
+                        PROJECTS
                     </button>
-                    <button onclick="saveCurrentWorkspace()" 
-                            class="btn-secondary px-1.5 py-0.5 text-xs font-medium">
+                    <button onclick="quickSaveProject()" 
+                            class="btn-success px-2 py-0.5 text-xs font-medium"
+                            title="Save current project (Ctrl+S)">
                         SAVE
                     </button>
-                    <button onclick="saveWorkspaceAs()" 
-                            class="btn-success px-1.5 py-0.5 text-xs font-medium">
-                        SAVE AS
-                    </button>
-                    <button onclick="deleteCurrentWorkspace()" 
-                            class="btn-danger px-1.5 py-0.5 text-xs font-medium">
-                        DELETE
-                    </button>
+                    <span class="text-xs text-gray-500 whitespace-nowrap">
+                        <span id="currentProjectName" class="text-gray-300 font-mono">No Project</span>
+                    </span>
                 </div>
-                <div class="flex items-center gap-2 border-l border-gray-700 pl-2">
+                
+                <!-- View Controls -->
+                <div class="flex items-center gap-1 border-l border-gray-700 pl-2">
                     <button onclick="resetPanelLayout()" 
                             class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
                             title="Reset panel layout to default">
@@ -56,9 +48,11 @@
                     <button onclick="SettingsManager.openDialog()" 
                             class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
                             title="Arduino Pin Settings">
-                        ⚙ SETTINGS
+                        SETTINGS
                     </button>
                 </div>
+                
+                <!-- Simulation Toggle -->
                 <div class="flex items-center gap-2 border-l border-gray-700 pl-2">
                     <label class="text-xs text-gray-500 whitespace-nowrap">Simulation:</label>
                     <label class="toggle-switch">
@@ -67,6 +61,8 @@
                     </label>
                     <span id="simulationStatus" class="text-xs font-medium text-gray-500 whitespace-nowrap">OFF</span>
                 </div>
+                
+                <!-- ROS Status -->
                 <div class="flex items-center gap-2 border-l border-gray-700 pl-2 ml-auto">
                     <p id="rosStatus" class="text-xs status-disconnected font-medium whitespace-nowrap">● DISCONNECTED</p>
                     <p id="rosBridgeUrl" class="text-xs text-gray-500 whitespace-nowrap">{{ rosbridge_url|default("ws://localhost:9090") }}</p>
@@ -538,7 +534,7 @@
                             <button onclick="emergencyStop()" 
                                     class="btn-danger px-2.5 py-1 text-xs font-medium"
                                     title="Emergency stop - immediately stops all motors and turns off all relays">
-                                🛑 E-STOP
+                                E-STOP
                             </button>
                             <button onclick="clearWorkspace()" 
                                     class="btn-danger px-2.5 py-1 text-xs font-medium">
@@ -558,7 +554,7 @@
                             <button onclick="cleanUpWorkspace()" 
                                     class="btn-secondary px-2.5 py-1 text-xs font-medium"
                                     title="Organize blocks into neat columns and rows">
-                                🧹 CLEAN UP
+                                CLEAN UP
                             </button>
                         </div>
                         <!-- Blocks will be placed here -->
@@ -708,6 +704,108 @@
                     <button onclick="SettingsManager.closeDialog()" class="btn-secondary px-4 py-2 text-sm">Cancel</button>
                     <button onclick="SettingsManager.saveSettings()" class="btn-success px-4 py-2 text-sm">Save Settings</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Project Dialog Modal -->
+    <div id="projectModal" class="project-modal">
+        <div class="project-dialog">
+            <div class="project-header">
+                <h2 class="text-lg font-bold text-white">Project Manager</h2>
+                <button onclick="ProjectDialog.close()" class="project-close-btn">&times;</button>
+            </div>
+            
+            <div class="project-content">
+                <!-- Tabs -->
+                <div class="project-tabs">
+                    <button onclick="ProjectDialog.switchTab('browse')" id="projectTab-browse" class="project-tab active">
+                        Browse Projects
+                    </button>
+                    <button onclick="ProjectDialog.switchTab('new')" id="projectTab-new" class="project-tab">
+                        New Project
+                    </button>
+                    <button onclick="ProjectDialog.switchTab('save')" id="projectTab-save" class="project-tab">
+                        Save Current
+                    </button>
+                </div>
+                
+                <!-- Browse Projects Panel -->
+                <div id="projectPanel-browse" class="project-panel">
+                    <div class="project-search">
+                        <input type="text" id="projectSearchInput" 
+                               placeholder="Search projects..." 
+                               class="project-search-input"
+                               oninput="ProjectDialog.filterProjects()">
+                    </div>
+                    <div id="projectList" class="project-list">
+                        <p class="text-gray-500 text-center py-8">Loading projects...</p>
+                    </div>
+                </div>
+                
+                <!-- New Project Panel -->
+                <div id="projectPanel-new" class="project-panel hidden">
+                    <div class="project-form">
+                        <div class="project-form-group">
+                            <label class="project-form-label">Project Name *</label>
+                            <input type="text" id="newProjectName" 
+                                   class="project-form-input"
+                                   placeholder="Enter project name..."
+                                   maxlength="100">
+                        </div>
+                        <div class="project-form-group">
+                            <label class="project-form-label">Description</label>
+                            <textarea id="newProjectDescription" 
+                                      class="project-form-textarea"
+                                      placeholder="Describe your project (optional)..."
+                                      rows="3"
+                                      maxlength="500"></textarea>
+                        </div>
+                        <div class="project-form-actions">
+                            <button onclick="ProjectDialog.createNewProject()" class="btn-success px-4 py-2 text-sm">
+                                + CREATE PROJECT
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Save Current Panel -->
+                <div id="projectPanel-save" class="project-panel hidden">
+                    <div class="project-form">
+                        <div class="project-current-info">
+                            <span class="text-xs text-gray-400">Current Project:</span>
+                            <span id="saveCurrentName" class="text-sm text-white font-medium">No project loaded</span>
+                        </div>
+                        <div class="project-form-group">
+                            <label class="project-form-label">Project Name *</label>
+                            <input type="text" id="saveProjectName" 
+                                   class="project-form-input"
+                                   placeholder="Enter project name..."
+                                   maxlength="100">
+                        </div>
+                        <div class="project-form-group">
+                            <label class="project-form-label">Description</label>
+                            <textarea id="saveProjectDescription" 
+                                      class="project-form-textarea"
+                                      placeholder="Describe your project (optional)..."
+                                      rows="3"
+                                      maxlength="500"></textarea>
+                        </div>
+                        <div class="project-form-hint">
+                            Tip: Save with a new name to create a copy
+                        </div>
+                        <div class="project-form-actions">
+                            <button onclick="ProjectDialog.saveProject()" class="btn-success px-4 py-2 text-sm">
+                                SAVE PROJECT
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="project-footer">
+                <div id="projectError" class="project-error"></div>
+                <button onclick="ProjectDialog.close()" class="btn-secondary px-4 py-2 text-sm">Close</button>
             </div>
         </div>
     </div>
