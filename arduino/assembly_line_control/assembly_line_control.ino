@@ -395,8 +395,8 @@ void processMotorCommand(String command) {
   
   int motor_index = motor_id - 1; // Convert to 0-based index
   
-  // Extract steps
-  int steps = extractInt(command, "steps");
+  // Extract steps (using long to support maximum range)
+  long steps = extractLong(command, "steps");
   
   // Extract speed (if provided)
   float speed = extractFloat(command, "speed");
@@ -465,13 +465,13 @@ void processRelayCommand(String command) {
   state.toLowerCase();
   
   if (state == "on") {
-    digitalWrite(RELAY_PINS[relay_index], HIGH);
+    digitalWrite(RELAY_PINS[relay_index], LOW);
     relay_states[relay_index] = true;
     Serial.print("OK: Relay ");
     Serial.print(relay_id);
     Serial.println(" ON");
   } else if (state == "off") {
-    digitalWrite(RELAY_PINS[relay_index], LOW);
+    digitalWrite(RELAY_PINS[relay_index], HIGH);
     relay_states[relay_index] = false;
     Serial.print("OK: Relay ");
     Serial.print(relay_id);
@@ -566,6 +566,28 @@ int extractInt(String json, String key) {
   String valueStr = json.substring(valueStart, valueEnd);
   valueStr.trim();
   return valueStr.toInt();
+}
+
+// Helper function to extract long value from JSON string (for large step values)
+long extractLong(String json, String key) {
+  String searchKey = "\"" + key + "\":";
+  int keyIndex = json.indexOf(searchKey);
+  if (keyIndex < 0) {
+    return 0;
+  }
+  
+  int valueStart = keyIndex + searchKey.length();
+  int valueEnd = json.indexOf(',', valueStart);
+  if (valueEnd < 0) {
+    valueEnd = json.indexOf('}', valueStart);
+  }
+  if (valueEnd < 0) {
+    return 0;
+  }
+  
+  String valueStr = json.substring(valueStart, valueEnd);
+  valueStr.trim();
+  return valueStr.toInt(); // toInt() returns long on Arduino (32-bit signed integer)
 }
 
 // Helper function to extract float value from JSON string

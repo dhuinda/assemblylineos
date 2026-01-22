@@ -20,8 +20,8 @@ const Config = {
     BLOCK_DEFAULT_WIDTH: 140,
     
     // Validation
-    MAX_STEPS: 100000,
-    MIN_STEPS: -100000,
+    MAX_STEPS: 2147483647, // Maximum 32-bit signed integer (Arduino long limit)
+    MIN_STEPS: -2147483647, // Minimum 32-bit signed integer (Arduino long limit)
     MAX_TIME_DELAY: 3600, // 1 hour max
     MIN_TIME_DELAY: 0,
     
