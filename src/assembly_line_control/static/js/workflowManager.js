@@ -355,6 +355,10 @@ const WorkflowManager = {
             
             const data = JSON.parse(dataStr);
             
+            if (typeof UndoManager !== 'undefined') {
+                UndoManager.pushState();
+            }
+            
             // Get template block from palette
             let templateBlock = null;
             if (data.type === 'event') {
@@ -461,6 +465,7 @@ const WorkflowManager = {
         let isDragging = false;
         let dragStart = { x: 0, y: 0 };
         let startPos = { x: 0, y: 0 };
+        let hasPushedForThisDrag = false;
         
         blockEl.addEventListener('mousedown', (e) => {
             if (e.target.classList.contains('block-connector') || 
@@ -472,6 +477,7 @@ const WorkflowManager = {
             }
             
             isDragging = true;
+            hasPushedForThisDrag = false;
             const rect = blockEl.getBoundingClientRect();
             const canvasRect = this.canvas.getBoundingClientRect();
             
@@ -492,6 +498,12 @@ const WorkflowManager = {
         
         window.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
+            
+            // Push state on first move of drag (for undo)
+            if (!hasPushedForThisDrag && typeof UndoManager !== 'undefined') {
+                UndoManager.pushState();
+                hasPushedForThisDrag = true;
+            }
             
             // Throttle drag updates for better performance
             const now = performance.now();
@@ -599,40 +611,25 @@ const WorkflowManager = {
         const block = this.blocks.get(blockId);
         if (!block) return;
         
-        // Remove workflows triggered by this block
+        if (typeof UndoManager !== 'undefined') {
+            UndoManager.pushState();
+        }
+        
+        // Unlink workflows triggered by this block (keep workflows and their blocks)
         if (block.triggersWorkflows) {
-            const workflowsToRemove = [...block.triggersWorkflows];
-            workflowsToRemove.forEach(workflowId => {
+            block.triggersWorkflows.forEach(workflowId => {
                 const workflow = this.workflows.get(workflowId);
                 if (workflow) {
-                    // Remove all blocks in the workflow (starting from the event block)
                     const eventBlockId = workflow.rootBlockId;
-                    if (eventBlockId && eventBlockId !== blockId) {
-                        // Remove all blocks in the workflow chain (avoid recursive call)
+                    if (eventBlockId) {
                         const eventBlock = this.blocks.get(eventBlockId);
-                        if (eventBlock) {
-                            // Remove connected blocks
-                            const nextBlocks = BlockConnector.getNextBlocks(eventBlockId);
-                            nextBlocks.forEach(nextId => {
-                                // Remove chain without removing the block itself (to avoid recursion)
-                                this.removeBlockChainOnly(nextId);
-                            });
-                            
-                            // Remove connections from event block
-                            BlockConnector.removeBlockConnections(eventBlockId);
-                            
-                            // Remove the event block
-                            this.blocks.delete(eventBlockId);
-                            const eventBlockEl = document.querySelector(`[data-block-id="${eventBlockId}"]`);
-                            if (eventBlockEl) {
-                                eventBlockEl.remove();
-                            }
+                        if (eventBlock && eventBlock.triggeredBy === blockId) {
+                            eventBlock.triggeredBy = undefined;
+                            this.updateBlockTriggerIndicators(eventBlockId);
                         }
                     }
-                    this.workflows.delete(workflowId);
                 }
             });
-            // Clear triggersWorkflows from the block
             block.triggersWorkflows = [];
         }
         
@@ -654,38 +651,20 @@ const WorkflowManager = {
         if (block.workflowId) {
             const workflow = this.workflows.get(block.workflowId);
             if (workflow) {
-                // If this is the root block, remove the entire workflow
+                // If this is the root block, orphan child blocks and remove workflow
                 if (workflow.rootBlockId === blockId) {
-                    // Remove all blocks in the workflow
-                    const blocksToRemove = [...workflow.blocks];
-                    blocksToRemove.forEach(bid => {
+                    // Orphan child blocks (keep them on canvas, just break workflow link)
+                    workflow.blocks.forEach(bid => {
                         if (bid !== blockId) {
-                            // Don't call removeBlock to avoid recursion - just remove directly
                             const b = this.blocks.get(bid);
                             if (b) {
-                                // Remove connected blocks
-                                const nextBlocks = BlockConnector.getNextBlocks(bid);
-                                nextBlocks.forEach(nextId => {
-                                    this.removeBlockChainOnly(nextId);
-                                });
-                                
-                                // Remove connections
-                                BlockConnector.removeBlockConnections(bid);
-                                
-                                // Remove block
-                                this.blocks.delete(bid);
-                                const bEl = document.querySelector(`[data-block-id="${bid}"]`);
-                                if (bEl) {
-                                    bEl.remove();
-                                }
+                                b.workflowId = undefined;
                             }
                         }
                     });
                     this.workflows.delete(block.workflowId);
-                } else {
-                    // Remove all connected blocks too
-                    this.removeBlockChain(blockId);
                 }
+                // For non-root: do nothing extra - only remove this block and its connections below
             }
         }
         
@@ -818,6 +797,9 @@ const WorkflowManager = {
      */
     clearWorkspace() {
         if (UIUtils.confirm('Clear workspace? This cannot be undone.')) {
+            if (typeof UndoManager !== 'undefined') {
+                UndoManager.pushState();
+            }
             // Save the toolbar before clearing
             const toolbar = document.getElementById('workspaceToolbar');
             const toolbarParent = toolbar ? toolbar.parentElement : null;
@@ -1079,6 +1061,10 @@ const WorkflowManager = {
         if (this.blocks.size === 0) {
             UIUtils.log('[WORKFLOW] No blocks to organize', 'warning');
             return;
+        }
+        
+        if (typeof UndoManager !== 'undefined') {
+            UndoManager.pushState();
         }
         
         const CLUSTERING_THRESHOLD = 100; // Distance threshold for grouping positions

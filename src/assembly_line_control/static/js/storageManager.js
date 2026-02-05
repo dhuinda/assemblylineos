@@ -162,6 +162,175 @@ const StorageManager = {
     },
     
     /**
+     * Apply a configuration object to the workspace (used by load and undo)
+     * @param {Object} config - Configuration object from buildConfig or loaded JSON
+     * @param {Object} options - Options: { skipProjectUpdate: true } to preserve current project (for undo)
+     */
+    applyConfig(config, options = {}) {
+        // Stop any active execution
+        ExecutionEngine.stop();
+        
+        // Clear current state
+        WorkflowManager.blocks.clear();
+        WorkflowManager.workflows.clear();
+        BlockConnector.connections.clear();
+        
+        // Load blocks first
+        let maxBlockId = 0;
+        if (config.blocks && Array.isArray(config.blocks)) {
+            config.blocks.forEach(block => {
+                const blockId = parseInt(block.id) || 0;
+                if (blockId === 0) {
+                    return;
+                }
+                
+                const blockData = { ...block };
+                blockData.id = blockId;
+                
+                if (!blockData.connections) {
+                    blockData.connections = { prev: null, next: null };
+                }
+                
+                if (blockData.connections.next !== null && blockData.connections.next !== undefined) {
+                    if (!Array.isArray(blockData.connections.next)) {
+                        blockData.connections.next = [blockData.connections.next];
+                    }
+                }
+                
+                WorkflowManager.blocks.set(blockId, blockData);
+                if (blockId > maxBlockId) {
+                    maxBlockId = blockId;
+                }
+            });
+        }
+        
+        // Load workflows
+        let maxWorkflowId = 0;
+        if (config.workflows && Array.isArray(config.workflows)) {
+            config.workflows.forEach(workflow => {
+                const workflowId = parseInt(workflow.id) || 0;
+                if (workflowId === 0) {
+                    return;
+                }
+                
+                const blockIds = (workflow.blocks || []).map(id => parseInt(id)).filter(id => {
+                    return id && WorkflowManager.blocks.has(id);
+                });
+                
+                WorkflowManager.workflows.set(workflowId, {
+                    ...workflow,
+                    id: workflowId,
+                    blocks: new Set(blockIds)
+                });
+                
+                if (workflowId > maxWorkflowId) {
+                    maxWorkflowId = workflowId;
+                }
+            });
+        }
+        
+        // Load connections
+        if (config.connections && Array.isArray(config.connections)) {
+            config.connections.forEach(conn => {
+                const blockId = parseInt(conn.id) || 0;
+                if (blockId === 0 || !WorkflowManager.blocks.has(blockId)) {
+                    return;
+                }
+                
+                let next = conn.next || null;
+                if (next !== null && next !== undefined) {
+                    if (!Array.isArray(next)) {
+                        next = [next];
+                    }
+                    next = next.map(id => parseInt(id)).filter(id => id && WorkflowManager.blocks.has(id));
+                    if (next.length === 0) {
+                        next = null;
+                    }
+                }
+                
+                let prev = conn.prev || null;
+                if (prev !== null && prev !== undefined) {
+                    prev = parseInt(prev);
+                    if (!prev || !WorkflowManager.blocks.has(prev)) {
+                        prev = null;
+                    }
+                }
+                
+                BlockConnector.connections.set(blockId, {
+                    prev: prev,
+                    next: next
+                });
+                
+                const block = WorkflowManager.blocks.get(blockId);
+                if (block) {
+                    if (!block.connections) block.connections = {};
+                    block.connections.prev = prev;
+                    block.connections.next = next;
+                }
+            });
+        }
+        
+        // Validate workflow references
+        WorkflowManager.blocks.forEach((block, blockId) => {
+            if (block.workflowId) {
+                const workflowId = parseInt(block.workflowId);
+                if (!WorkflowManager.workflows.has(workflowId)) {
+                    block.workflowId = undefined;
+                } else {
+                    const workflow = WorkflowManager.workflows.get(workflowId);
+                    if (workflow && !workflow.blocks.has(blockId)) {
+                        workflow.blocks.add(blockId);
+                    }
+                }
+            }
+            
+            if (block.triggeredBy) {
+                const triggeredById = parseInt(block.triggeredBy);
+                if (!WorkflowManager.blocks.has(triggeredById)) {
+                    block.triggeredBy = undefined;
+                }
+            }
+            
+            if (block.triggersWorkflows && Array.isArray(block.triggersWorkflows)) {
+                block.triggersWorkflows = block.triggersWorkflows.map(wid => parseInt(wid)).filter(wid => {
+                    return wid && WorkflowManager.workflows.has(wid);
+                });
+            }
+        });
+        
+        // Reassign counters
+        WorkflowManager.blockIdCounter = Math.max(maxBlockId + 1, config.blockIdCounter || 0);
+        WorkflowManager.workflowIdCounter = Math.max(maxWorkflowId + 1, config.workflowIdCounter || 0);
+        
+        // Load motor speeds if available
+        if (config.motorSpeeds) {
+            MotorSpeedManager.speeds = { ...MotorSpeedManager.speeds, ...config.motorSpeeds };
+            MotorSpeedManager.updateUI(1);
+            MotorSpeedManager.updateUI(2);
+        }
+        
+        // Load custom paths if available
+        if (config.customPaths) {
+            BlockConnector.importCustomPaths(config.customPaths);
+        }
+        
+        if (!options.skipProjectUpdate) {
+            this.setCurrentProject({
+                id: config.id || null,
+                name: config.name || 'Untitled Project',
+                description: config.description || ''
+            });
+        }
+        
+        // Re-render everything
+        WorkflowManager.renderAll();
+        
+        if (!options.skipProjectUpdate) {
+            this.updateProjectUI();
+        }
+    },
+    
+    /**
      * Load project from server
      * @param {string} projectId - Project ID to load
      * @param {boolean} confirmFirst - Whether to ask for confirmation
@@ -188,163 +357,12 @@ const StorageManager = {
             }
             
             const config = await response.json();
+            config.id = projectId;
             
-            // Stop any active execution
-            ExecutionEngine.stop();
-            
-            // Clear current state
-            WorkflowManager.blocks.clear();
-            WorkflowManager.workflows.clear();
-            BlockConnector.connections.clear();
-            
-            // Load blocks first
-            let maxBlockId = 0;
-            if (config.blocks && Array.isArray(config.blocks)) {
-                config.blocks.forEach(block => {
-                    const blockId = parseInt(block.id) || 0;
-                    if (blockId === 0) {
-                        return;
-                    }
-                    
-                    const blockData = { ...block };
-                    blockData.id = blockId;
-                    
-                    if (!blockData.connections) {
-                        blockData.connections = { prev: null, next: null };
-                    }
-                    
-                    if (blockData.connections.next !== null && blockData.connections.next !== undefined) {
-                        if (!Array.isArray(blockData.connections.next)) {
-                            blockData.connections.next = [blockData.connections.next];
-                        }
-                    }
-                    
-                    WorkflowManager.blocks.set(blockId, blockData);
-                    if (blockId > maxBlockId) {
-                        maxBlockId = blockId;
-                    }
-                });
+            if (typeof UndoManager !== 'undefined') {
+                UndoManager.clear();
             }
-            
-            // Load workflows
-            let maxWorkflowId = 0;
-            if (config.workflows && Array.isArray(config.workflows)) {
-                config.workflows.forEach(workflow => {
-                    const workflowId = parseInt(workflow.id) || 0;
-                    if (workflowId === 0) {
-                        return;
-                    }
-                    
-                    const blockIds = (workflow.blocks || []).map(id => parseInt(id)).filter(id => {
-                        return id && WorkflowManager.blocks.has(id);
-                    });
-                    
-                    WorkflowManager.workflows.set(workflowId, {
-                        ...workflow,
-                        id: workflowId,
-                        blocks: new Set(blockIds)
-                    });
-                    
-                    if (workflowId > maxWorkflowId) {
-                        maxWorkflowId = workflowId;
-                    }
-                });
-            }
-            
-            // Load connections
-            if (config.connections && Array.isArray(config.connections)) {
-                config.connections.forEach(conn => {
-                    const blockId = parseInt(conn.id) || 0;
-                    if (blockId === 0 || !WorkflowManager.blocks.has(blockId)) {
-                        return;
-                    }
-                    
-                    let next = conn.next || null;
-                    if (next !== null && next !== undefined) {
-                        if (!Array.isArray(next)) {
-                            next = [next];
-                        }
-                        next = next.map(id => parseInt(id)).filter(id => id && WorkflowManager.blocks.has(id));
-                        if (next.length === 0) {
-                            next = null;
-                        }
-                    }
-                    
-                    let prev = conn.prev || null;
-                    if (prev !== null && prev !== undefined) {
-                        prev = parseInt(prev);
-                        if (!prev || !WorkflowManager.blocks.has(prev)) {
-                            prev = null;
-                        }
-                    }
-                    
-                    BlockConnector.connections.set(blockId, {
-                        prev: prev,
-                        next: next
-                    });
-                    
-                    const block = WorkflowManager.blocks.get(blockId);
-                    if (block) {
-                        if (!block.connections) block.connections = {};
-                        block.connections.prev = prev;
-                        block.connections.next = next;
-                    }
-                });
-            }
-            
-            // Validate workflow references
-            WorkflowManager.blocks.forEach((block, blockId) => {
-                if (block.workflowId) {
-                    const workflowId = parseInt(block.workflowId);
-                    if (!WorkflowManager.workflows.has(workflowId)) {
-                        block.workflowId = undefined;
-                    } else {
-                        const workflow = WorkflowManager.workflows.get(workflowId);
-                        if (workflow && !workflow.blocks.has(blockId)) {
-                            workflow.blocks.add(blockId);
-                        }
-                    }
-                }
-                
-                if (block.triggeredBy) {
-                    const triggeredById = parseInt(block.triggeredBy);
-                    if (!WorkflowManager.blocks.has(triggeredById)) {
-                        block.triggeredBy = undefined;
-                    }
-                }
-                
-                if (block.triggersWorkflows && Array.isArray(block.triggersWorkflows)) {
-                    block.triggersWorkflows = block.triggersWorkflows.map(wid => parseInt(wid)).filter(wid => {
-                        return wid && WorkflowManager.workflows.has(wid);
-                    });
-                }
-            });
-            
-            // Reassign counters
-            WorkflowManager.blockIdCounter = Math.max(maxBlockId + 1, config.blockIdCounter || 0);
-            WorkflowManager.workflowIdCounter = Math.max(maxWorkflowId + 1, config.workflowIdCounter || 0);
-            
-            // Load motor speeds if available
-            if (config.motorSpeeds) {
-                MotorSpeedManager.speeds = { ...MotorSpeedManager.speeds, ...config.motorSpeeds };
-                MotorSpeedManager.updateUI(1);
-                MotorSpeedManager.updateUI(2);
-            }
-            
-            // Load custom paths if available
-            if (config.customPaths) {
-                BlockConnector.importCustomPaths(config.customPaths);
-            }
-            
-            // Set as current project
-            this.setCurrentProject({
-                id: projectId,
-                name: config.name || projectId,
-                description: config.description || ''
-            });
-            
-            // Re-render everything
-            WorkflowManager.renderAll();
+            this.applyConfig(config);
             
             UIUtils.log(`[LOAD] Project "${config.name || projectId}" loaded`, 'success');
             this.updateProjectUI();
@@ -406,6 +424,9 @@ const StorageManager = {
      * @returns {Promise<boolean>} - Success status
      */
     async createNew(name = 'Untitled Project', description = '') {
+        if (typeof UndoManager !== 'undefined') {
+            UndoManager.clear();
+        }
         // Clear current state
         WorkflowManager.blocks.clear();
         WorkflowManager.workflows.clear();

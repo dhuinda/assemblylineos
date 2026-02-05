@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Assembly Line OS</title>
+    <script>
+        (function(){if(localStorage.getItem('assemblyLineTheme')==='light'){document.documentElement.setAttribute('data-theme','light');}})();
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -40,6 +43,14 @@
                 
                 <!-- View Controls -->
                 <div class="flex items-center gap-1 border-l border-gray-700 pl-2">
+                    <label class="text-xs text-gray-500 whitespace-nowrap flex items-center gap-2">
+                        Theme:
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="themeToggle" onchange="toggleTheme()" title="Switch between dark and light mode">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span id="themeStatus" class="text-xs font-medium text-gray-500 whitespace-nowrap">Dark</span>
+                    </label>
                     <button onclick="resetPanelLayout()" 
                             class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
                             title="Reset panel layout to default">
@@ -826,6 +837,7 @@
     <script src="{{ url_for('static', filename='js/workflowManager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/blockConnector.js') }}"></script>
     <script src="{{ url_for('static', filename='js/storageManager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/undoManager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/executionEngine.js') }}"></script>
     <script src="{{ url_for('static', filename='js/activeBlocksPanel.js') }}"></script>
     <script src="{{ url_for('static', filename='js/settingsManager.js') }}"></script>
@@ -1060,8 +1072,30 @@
             }
         }
 
+        // Theme toggle - light/dark mode
+        const THEME_KEY = 'assemblyLineTheme';
+        function toggleTheme() {
+            const toggle = document.getElementById('themeToggle');
+            const status = document.getElementById('themeStatus');
+            const isLight = toggle.checked;
+            document.documentElement.setAttribute('data-theme', isLight ? 'light' : '');
+            status.textContent = isLight ? 'Light' : 'Dark';
+            localStorage.setItem(THEME_KEY, isLight ? 'light' : 'dark');
+        }
+        function initTheme() {
+            const saved = localStorage.getItem(THEME_KEY);
+            const toggle = document.getElementById('themeToggle');
+            const status = document.getElementById('themeStatus');
+            if (saved === 'light' && toggle) {
+                toggle.checked = true;
+                document.documentElement.setAttribute('data-theme', 'light');
+                if (status) status.textContent = 'Light';
+            }
+        }
+
         // Initialize motor run buttons and relay states
         window.addEventListener('DOMContentLoaded', function() {
+            initTheme();
             updateMotorRunButtons(1);
             updateMotorRunButtons(2);
             updateBothMotorsRunButtons();

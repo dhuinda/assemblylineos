@@ -53,6 +53,24 @@ const App = {
             if (e.key === 'Escape') {
                 ProjectDialog.close();
             }
+            // Ctrl/Cmd + Z to undo
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                if (typeof UndoManager !== 'undefined' && UndoManager.undo()) {
+                    // Handled
+                }
+            }
+            // Space bar to activate E-Stop (when not typing in an input)
+            if (e.code === 'Space') {
+                const active = document.activeElement;
+                const isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable);
+                if (!isInput) {
+                    e.preventDefault();
+                    if (typeof emergencyStop === 'function') {
+                        emergencyStop();
+                    }
+                }
+            }
         });
     }
 };

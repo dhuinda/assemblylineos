@@ -381,6 +381,10 @@ const BlockConnector = {
     connectBlocks(fromBlockId, toBlockId) {
         if (!fromBlockId || !toBlockId || fromBlockId === toBlockId) return;
         
+        if (typeof UndoManager !== 'undefined') {
+            UndoManager.pushState();
+        }
+        
         // Initialize connections if needed
         if (!this.connections.has(fromBlockId)) {
             this.connections.set(fromBlockId, { prev: null, next: [] });
@@ -515,6 +519,10 @@ const BlockConnector = {
      */
     disconnectBlocks(fromBlockId, toBlockId) {
         if (!this.connections.has(fromBlockId) || !this.connections.has(toBlockId)) return;
+        
+        if (typeof UndoManager !== 'undefined') {
+            UndoManager.pushState();
+        }
         
         const fromConn = this.connections.get(fromBlockId);
         const toConn = this.connections.get(toBlockId);
