@@ -772,6 +772,66 @@ const ExecutionEngine = {
     },
     
     /**
+     * Update the playback panel from synced active blocks data (when playback runs on another device)
+     * @param {Object} data - { blockIds: number[], totalElapsed: number, blockElapsed: { [blockId]: number } }
+     */
+    updateActiveBlocksPanelFromSync(data) {
+        const activePanel = document.getElementById('activeBlocksPanel');
+        if (!activePanel) return;
+        const blockIds = data.blockIds || [];
+        const totalElapsed = data.totalElapsed || 0;
+        const blockElapsedMap = data.blockElapsed || {};
+        
+        if (blockIds.length === 0) {
+            activePanel.innerHTML = '<p class="text-xs text-gray-500 text-center py-4">No blocks executing</p>';
+            return;
+        }
+        
+        const fragment = document.createDocumentFragment();
+        
+        const elapsedEl = document.createElement('div');
+        elapsedEl.className = 'text-xs text-gray-400 mb-3 pb-2 border-b border-gray-700';
+        elapsedEl.innerHTML = `<span class="font-semibold text-white">Total Elapsed:</span> <span class="text-green-400">${totalElapsed.toFixed(2)}s</span> <span class="text-gray-500">(synced from playback)</span>`;
+        fragment.appendChild(elapsedEl);
+        
+        blockIds.forEach(blockId => {
+            const block = WorkflowManager.blocks.get(blockId);
+            if (!block) return;
+            const blockElapsed = blockElapsedMap[blockId] != null ? blockElapsedMap[blockId] : 0;
+            const typeClass = typeof BlockSystem !== 'undefined' ? BlockSystem.getBlockTypeClass(block.type) : 'bg-gray-700';
+            const blockEl = document.createElement('div');
+            blockEl.className = `p-2 ${typeClass} card mb-2`;
+            
+            let content = '';
+            if (block.type === 'motor') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-motor font-semibold">MOTOR ${block.motor_id}</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'relay') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-relay font-semibold">RELAY ${block.relay_id}</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'delay') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-delay font-semibold">DELAY</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'pause') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-pause font-semibold">PAUSE</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'event') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-trigger font-semibold">EVENT</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else {
+                content = `<div class="text-xs text-gray-400 font-mono">#${blockId}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            }
+            blockEl.innerHTML = content;
+            fragment.appendChild(blockEl);
+        });
+        
+        if (blockIds.length > 1) {
+            const countEl = document.createElement('div');
+            countEl.className = 'text-xs text-gray-400 text-center mt-2 pt-2 border-t border-gray-700';
+            countEl.textContent = `${blockIds.length} blocks executing in parallel`;
+            fragment.appendChild(countEl);
+        }
+        
+        activePanel.innerHTML = '';
+        activePanel.appendChild(fragment);
+    },
+    
+    /**
      * Resume paused execution
      */
     resume() {
@@ -876,8 +936,14 @@ const ExecutionEngine = {
             
             // Throttle updates to target FPS
             if (currentTime - lastUpdateTime >= minUpdateInterval) {
-                if (this.executingBlocks.size > 0) {
-                    this.updateActiveBlocksPanel();
+                this.updateActiveBlocksPanel();
+                if (typeof ROSBridge !== 'undefined' && ROSBridge.isConnected) {
+                    const totalElapsed = this.executionStartTime ? ((currentTime - this.executionStartTime) / 1000) : 0;
+                    const blockElapsed = {};
+                    this.blockStartTimes.forEach((startTime, blockId) => {
+                        blockElapsed[blockId] = (currentTime - startTime) / 1000;
+                    });
+                    ROSBridge.publishActiveBlocksState(Array.from(this.executingBlocks), totalElapsed, blockElapsed);
                 }
                 lastUpdateTime = currentTime;
             }

@@ -13,10 +13,19 @@ const ROSBridge = {
     relayPub: null,
     sequencePub: null,
     estopPub: null,
+    executionStatePub: null,
+    executionStateSub: null,
+    executionStopRequestPub: null,
+    executionStopRequestSub: null,
+    executionStateInterval: null,
+    activeBlocksPub: null,
+    activeBlocksSub: null,
     motor1StatusSub: null,
     motor2StatusSub: null,
     motorStatus: {}, // Keep track of each motor's status
     isConnected: false,
+    /** Shared execution state across all clients: { running, projectId, clientId } */
+    executionSyncState: { running: false, projectId: null, clientId: null },
     dynamicSubscriptions: new Map(), // For subscribing to topics on the fly
     messageThrottle: new Map(), // Slow down updates that come too fast
     connectionQuality: { latency: 0, messageRate: 0, lastMessageTime: null }, // How's the connection doing?
@@ -96,6 +105,17 @@ const ROSBridge = {
                 this.init();
             }, Config.ROS_RECONNECT_DELAY);
         });
+        
+        // When this tab closes, if we were the executor, try to publish stopped so other clients update
+        if (typeof window !== 'undefined') {
+            window.addEventListener('beforeunload', () => {
+                if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+                    this.stopExecutionStateHeartbeat();
+                    const projectId = (typeof StorageManager !== 'undefined' && StorageManager.getCurrentProject()) ? StorageManager.getCurrentProject().id : null;
+                    try { this.publishExecutionState(false, projectId); } catch (e) {}
+                }
+            });
+        }
     },
     
     /**
@@ -144,7 +164,128 @@ const ROSBridge = {
             messageType: 'std_msgs/String'
         });
         
+        this.executionStatePub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/assembly_line/execution_state',
+            messageType: 'std_msgs/String'
+        });
+        
+        this.executionStopRequestPub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/assembly_line/execution_stop_request',
+            messageType: 'std_msgs/String'
+        });
+        
+        this.activeBlocksPub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/assembly_line/active_blocks',
+            messageType: 'std_msgs/String'
+        });
+        
         UIUtils.log('[ROS] Publishers initialized', 'success');
+    },
+    
+    /**
+     * Publish active blocks state so desktop (non-executor) can show playback panel
+     * @param {number[]} blockIds - Currently executing block IDs
+     * @param {number} totalElapsed - Total execution elapsed seconds
+     * @param {Object} blockElapsed - Map of blockId -> elapsed seconds
+     */
+    publishActiveBlocksState(blockIds, totalElapsed, blockElapsed) {
+        if (!this.isConnected || !this.activeBlocksPub) return;
+        try {
+            const payload = {
+                blockIds: blockIds || [],
+                totalElapsed: totalElapsed || 0,
+                blockElapsed: blockElapsed || {}
+            };
+            this.activeBlocksPub.publish(new ROSLIB.Message({ data: JSON.stringify(payload) }));
+        } catch (e) {
+            console.error('[ROS] publishActiveBlocksState error:', e);
+        }
+    },
+    
+    /**
+     * Get or create a stable client ID for this tab (used for execution sync across instances)
+     */
+    getClientId() {
+        try {
+            let id = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('assembly_line_client_id');
+            if (!id) {
+                id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                    const r = Math.random() * 16 | 0;
+                    const v = c === 'y' ? (Math.random() * 4 | 8) : (Math.random() * 16 | 0);
+                    return v.toString(16);
+                });
+                if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('assembly_line_client_id', id);
+            }
+            return id;
+        } catch (e) {
+            return 'client-' + Math.random().toString(36).slice(2, 11);
+        }
+    },
+    
+    /**
+     * Publish execution state so all clients (main + remote) stay in sync
+     * @param {boolean} running - Whether playback is running
+     * @param {string|null} projectId - Current project id when running
+     */
+    publishExecutionState(running, projectId) {
+        if (!this.isConnected || !this.executionStatePub) return;
+        try {
+            this.executionSyncState = {
+                running: !!running,
+                projectId: running ? (projectId || null) : null,
+                clientId: this.getClientId()
+            };
+            const msg = new ROSLIB.Message({
+                data: JSON.stringify({
+                    running: this.executionSyncState.running,
+                    projectId: this.executionSyncState.projectId,
+                    clientId: this.executionSyncState.clientId
+                })
+            });
+            this.executionStatePub.publish(msg);
+            if (typeof window.onExecutionStateUpdate === 'function') {
+                window.onExecutionStateUpdate(this.executionSyncState);
+            }
+        } catch (e) {
+            console.error('[ROS] publishExecutionState error:', e);
+        }
+    },
+    
+    /**
+     * Request that the current executor stop playback (used when another client presses Stop)
+     */
+    publishStopRequest() {
+        if (!this.isConnected || !this.executionStopRequestPub) return;
+        try {
+            this.executionStopRequestPub.publish(new ROSLIB.Message({ data: '{}' }));
+        } catch (e) {
+            console.error('[ROS] publishStopRequest error:', e);
+        }
+    },
+    
+    /**
+     * Start periodic re-publish of execution state so late-joining clients see current state
+     */
+    startExecutionStateHeartbeat(projectId) {
+        this.stopExecutionStateHeartbeat();
+        const self = this;
+        this.executionStateInterval = setInterval(() => {
+            if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+                self.publishExecutionState(true, projectId);
+            } else {
+                self.stopExecutionStateHeartbeat();
+            }
+        }, 1500);
+    },
+    
+    stopExecutionStateHeartbeat() {
+        if (this.executionStateInterval) {
+            clearInterval(this.executionStateInterval);
+            this.executionStateInterval = null;
+        }
     },
     
     /**
@@ -204,6 +345,69 @@ const ROSBridge = {
                 }
             } catch (e) {
                 console.error('Failed to parse motor2 status:', e);
+            }
+        });
+        
+        // Execution sync: so all instances (main + remote) see same playback state
+        this.executionStateSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/assembly_line/execution_state',
+            messageType: 'std_msgs/String'
+        });
+        this.executionStateSub.subscribe((msg) => {
+            try {
+                const data = this.safeJsonParse(msg.data, '/assembly_line/execution_state');
+                if (data && typeof data.running === 'boolean') {
+                    this.executionSyncState = {
+                        running: data.running,
+                        projectId: data.projectId || null,
+                        clientId: data.clientId || null
+                    };
+                    if (typeof window.onExecutionStateUpdate === 'function') {
+                        window.onExecutionStateUpdate(this.executionSyncState);
+                    }
+                }
+            } catch (e) {
+                console.error('[ROS] execution_state parse error:', e);
+            }
+        });
+        
+        this.executionStopRequestSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/assembly_line/execution_stop_request',
+            messageType: 'std_msgs/String'
+        });
+        this.executionStopRequestSub.subscribe(() => {
+            if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+                ExecutionEngine.stop();
+                this.stopExecutionStateHeartbeat();
+                const projectId = (typeof StorageManager !== 'undefined' && StorageManager.getCurrentProject())
+                    ? StorageManager.getCurrentProject().id
+                    : null;
+                this.publishExecutionState(false, projectId);
+                if (typeof UIUtils !== 'undefined') {
+                    UIUtils.log('[SYNC] Playback stopped by another device', 'warning');
+                }
+            }
+        });
+        
+        this.activeBlocksSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/assembly_line/active_blocks',
+            messageType: 'std_msgs/String'
+        });
+        this.activeBlocksSub.subscribe((msg) => {
+            try {
+                const data = this.safeJsonParse(msg.data, '/assembly_line/active_blocks');
+                if (!data) return;
+                if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting && this.executionSyncState.clientId === this.getClientId()) {
+                    return;
+                }
+                if (typeof window.onActiveBlocksUpdate === 'function') {
+                    window.onActiveBlocksUpdate(data);
+                }
+            } catch (e) {
+                console.error('[ROS] active_blocks parse error:', e);
             }
         });
         
@@ -272,6 +476,23 @@ const ROSBridge = {
             UIUtils.log(`[ROS] Error publishing motor command: ${error}`, 'error');
             return false;
         }
+    },
+
+    /**
+     * Publish a manual motor command: stop the motor first, then send steps.
+     * This ignores any previous steps_remaining so the motor runs exactly the requested steps.
+     * Use this for all manual (UI) motor controls.
+     * @param {number} motorId - Motor ID (1 or 2)
+     * @param {number} steps - Number of steps (use 0 only to stop; for stop use publishMotorCommand(motorId, 0))
+     * @param {number} speed - Optional speed in steps per second
+     * @returns {boolean} - Success status
+     */
+    publishManualMotorCommand(motorId, steps, speed = null) {
+        if (steps === 0) {
+            return this.publishMotorCommand(motorId, 0, speed);
+        }
+        this.publishMotorCommand(motorId, 0, null);
+        return this.publishMotorCommand(motorId, steps, speed);
     },
     
     /**

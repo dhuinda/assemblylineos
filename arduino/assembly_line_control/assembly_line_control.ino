@@ -98,10 +98,11 @@ void setup() {
     motors[i].step_interval = calculateStepInterval(motor_speeds[i]);
   }
   
-  // Initialize relay pins
+  // Initialize relay pins (HIGH = off, LOW = on for typical active-low relay modules)
   for (int i = 0; i < 4; i++) {
     pinMode(RELAY_PINS[i], OUTPUT);
-    digitalWrite(RELAY_PINS[i], LOW); // Start with relays off
+    digitalWrite(RELAY_PINS[i], HIGH); // Start with all relays OFF
+    relay_states[i] = false;
   }
   
   // Initialize custom pins array

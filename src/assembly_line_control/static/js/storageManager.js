@@ -331,6 +331,110 @@ const StorageManager = {
     },
     
     /**
+     * Apply a configuration without rendering (for remote/headless execution).
+     * Same as applyConfig but skips renderAll() and UI updates so execution works without a canvas.
+     * @param {Object} config - Configuration object from buildConfig or loaded JSON
+     */
+    applyConfigHeadless(config) {
+        if (typeof ExecutionEngine !== 'undefined') {
+            ExecutionEngine.stop();
+        }
+        
+        WorkflowManager.blocks.clear();
+        WorkflowManager.workflows.clear();
+        BlockConnector.connections.clear();
+        
+        let maxBlockId = 0;
+        if (config.blocks && Array.isArray(config.blocks)) {
+            config.blocks.forEach(block => {
+                const blockId = parseInt(block.id) || 0;
+                if (blockId === 0) return;
+                const blockData = { ...block };
+                blockData.id = blockId;
+                if (!blockData.connections) {
+                    blockData.connections = { prev: null, next: null };
+                }
+                if (blockData.connections.next !== null && blockData.connections.next !== undefined) {
+                    if (!Array.isArray(blockData.connections.next)) {
+                        blockData.connections.next = [blockData.connections.next];
+                    }
+                }
+                WorkflowManager.blocks.set(blockId, blockData);
+                if (blockId > maxBlockId) maxBlockId = blockId;
+            });
+        }
+        
+        let maxWorkflowId = 0;
+        if (config.workflows && Array.isArray(config.workflows)) {
+            config.workflows.forEach(workflow => {
+                const workflowId = parseInt(workflow.id) || 0;
+                if (workflowId === 0) return;
+                const blockIds = (workflow.blocks || []).map(id => parseInt(id)).filter(id => id && WorkflowManager.blocks.has(id));
+                WorkflowManager.workflows.set(workflowId, {
+                    ...workflow,
+                    id: workflowId,
+                    blocks: new Set(blockIds)
+                });
+                if (workflowId > maxWorkflowId) maxWorkflowId = workflowId;
+            });
+        }
+        
+        if (config.connections && Array.isArray(config.connections)) {
+            config.connections.forEach(conn => {
+                const blockId = parseInt(conn.id) || 0;
+                if (blockId === 0 || !WorkflowManager.blocks.has(blockId)) return;
+                let next = conn.next || null;
+                if (next !== null && next !== undefined) {
+                    if (!Array.isArray(next)) next = [next];
+                    next = next.map(id => parseInt(id)).filter(id => id && WorkflowManager.blocks.has(id));
+                    if (next.length === 0) next = null;
+                }
+                let prev = conn.prev || null;
+                if (prev !== null && prev !== undefined) {
+                    prev = parseInt(prev);
+                    if (!prev || !WorkflowManager.blocks.has(prev)) prev = null;
+                }
+                BlockConnector.connections.set(blockId, { prev: prev, next: next });
+                const block = WorkflowManager.blocks.get(blockId);
+                if (block) {
+                    if (!block.connections) block.connections = {};
+                    block.connections.prev = prev;
+                    block.connections.next = next;
+                }
+            });
+        }
+        
+        WorkflowManager.blocks.forEach((block, blockId) => {
+            if (block.workflowId) {
+                const workflowId = parseInt(block.workflowId);
+                if (!WorkflowManager.workflows.has(workflowId)) {
+                    block.workflowId = undefined;
+                } else {
+                    const workflow = WorkflowManager.workflows.get(workflowId);
+                    if (workflow && !workflow.blocks.has(blockId)) workflow.blocks.add(blockId);
+                }
+            }
+            if (block.triggeredBy) {
+                const triggeredById = parseInt(block.triggeredBy);
+                if (!WorkflowManager.blocks.has(triggeredById)) block.triggeredBy = undefined;
+            }
+            if (block.triggersWorkflows && Array.isArray(block.triggersWorkflows)) {
+                block.triggersWorkflows = block.triggersWorkflows.map(wid => parseInt(wid)).filter(wid => wid && WorkflowManager.workflows.has(wid));
+            }
+        });
+        
+        WorkflowManager.blockIdCounter = Math.max(maxBlockId + 1, config.blockIdCounter || 0);
+        WorkflowManager.workflowIdCounter = Math.max(maxWorkflowId + 1, config.workflowIdCounter || 0);
+        
+        if (config.motorSpeeds && typeof MotorSpeedManager !== 'undefined') {
+            MotorSpeedManager.speeds = { ...MotorSpeedManager.speeds, ...config.motorSpeeds };
+        }
+        if (config.customPaths && typeof BlockConnector !== 'undefined' && BlockConnector.importCustomPaths) {
+            BlockConnector.importCustomPaths(config.customPaths);
+        }
+    },
+    
+    /**
      * Load project from server
      * @param {string} projectId - Project ID to load
      * @param {boolean} confirmFirst - Whether to ask for confirmation

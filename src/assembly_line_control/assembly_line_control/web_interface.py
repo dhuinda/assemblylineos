@@ -257,6 +257,13 @@ def index():
     return render_template('index.html', rosbridge_url=rosbridge_url)
 
 
+@app.route('/remote')
+def remote():
+    """Serve the mobile remote view (project select, manual controls, start/stop/e-stop)."""
+    rosbridge_url = get_rosbridge_url()
+    return render_template('remote.html', rosbridge_url=rosbridge_url)
+
+
 def get_settings_path():
     """Get the path to the pin configuration file."""
     # Use ~/.assembly_line_os directory for configuration

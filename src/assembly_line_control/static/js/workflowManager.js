@@ -26,19 +26,24 @@ const WorkflowManager = {
     
     /**
      * Set everything up
+     * Safe when canvas/blockPalette are missing (e.g. remote/headless page) - skips DOM init.
      */
     init() {
         this.canvas = document.getElementById('workspaceCanvas');
         this.blockPalette = document.getElementById('blockPalette');
         
         if (!this.canvas) {
-            UIUtils.log('[WORKFLOW] Canvas not found', 'error');
+            if (typeof UIUtils !== 'undefined') {
+                UIUtils.log('[WORKFLOW] Canvas not found (headless/remote mode)', 'info');
+            }
             return;
         }
         
         this.initializePalette();
         this.initializeCanvas();
-        UIUtils.log('[WORKFLOW] Workflow manager initialized');
+        if (typeof UIUtils !== 'undefined') {
+            UIUtils.log('[WORKFLOW] Workflow manager initialized', 'info');
+        }
     },
     
     /**

@@ -1830,3 +1830,21 @@ button:disabled {
     background: rgba(0, 0, 0, 0.03);
 }
 
+/* Remote / mobile view: touch-friendly tap targets and spacing */
+.remote-tap {
+    min-height: 44px;
+}
+.remote-section {
+    margin-bottom: 1rem;
+}
+
+/* Remote view: allow scrolling (override global overflow: hidden) */
+html.remote-view,
+body.remote-view {
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    height: auto;
+    min-height: 100%;
+}
+

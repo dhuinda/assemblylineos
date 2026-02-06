@@ -30,6 +30,46 @@ const App = {
         // Set up event handlers
         this.attachEventHandlers();
         
+        // Sync execution state across all instances (main + remote)
+        window.onExecutionStateUpdate = (state) => {
+            const el = document.getElementById('executionSyncStatus');
+            const playBtn = document.getElementById('playBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const myId = ROSBridge.getClientId();
+            if (state.running) {
+                if (state.clientId === myId) {
+                    if (el) el.textContent = 'Running (this device)';
+                    if (el) el.className = 'text-xs text-green-400';
+                } else {
+                    if (el) el.textContent = 'Running (another device)';
+                    if (el) el.className = 'text-xs text-yellow-400';
+                }
+                if (playBtn) playBtn.disabled = true;
+                if (stopBtn) stopBtn.disabled = false;
+                // Activate playback panel on desktop when playback is running (this or another device)
+                if (typeof switchBottomPanel === 'function') {
+                    switchBottomPanel('playback');
+                }
+            } else {
+                if (el) el.textContent = '';
+                if (playBtn) playBtn.disabled = false;
+                if (stopBtn) stopBtn.disabled = false;
+                if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.updateActiveBlocksPanelFromSync) {
+                    ExecutionEngine.updateActiveBlocksPanelFromSync({ blockIds: [], totalElapsed: 0, blockElapsed: {} });
+                }
+            }
+        };
+        if (ROSBridge.executionSyncState && ROSBridge.executionSyncState.running) {
+            window.onExecutionStateUpdate(ROSBridge.executionSyncState);
+        }
+        
+        // When active blocks state is received from executor (another device), update playback panel
+        window.onActiveBlocksUpdate = (data) => {
+            if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.updateActiveBlocksPanelFromSync) {
+                ExecutionEngine.updateActiveBlocksPanelFromSync(data);
+            }
+        };
+        
         UIUtils.log('[SYSTEM] Application initialized', 'success');
     },
     
@@ -388,11 +428,33 @@ const ProjectDialog = {
 // ============================================
 
 function startExecution() {
-    ExecutionEngine.start();
+    if (!ROSBridge.isConnected) {
+        UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
+        return;
+    }
+    const project = StorageManager.getCurrentProject();
+    const projectId = (project && project.id) ? project.id : null;
+    ROSBridge.publishExecutionState(true, projectId);
+    ROSBridge.startExecutionStateHeartbeat(projectId);
+    ExecutionEngine.start().then(() => {
+        ROSBridge.stopExecutionStateHeartbeat();
+        ROSBridge.publishExecutionState(false, projectId);
+    }).catch(() => {
+        ROSBridge.stopExecutionStateHeartbeat();
+        ROSBridge.publishExecutionState(false, projectId);
+    });
 }
 
 function stopExecution() {
-    ExecutionEngine.stop();
+    if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+        ROSBridge.stopExecutionStateHeartbeat();
+        ExecutionEngine.stop();
+        const project = StorageManager.getCurrentProject();
+        const projectId = (project && project.id) ? project.id : null;
+        ROSBridge.publishExecutionState(false, projectId);
+    } else {
+        ROSBridge.publishStopRequest();
+    }
 }
 
 /**

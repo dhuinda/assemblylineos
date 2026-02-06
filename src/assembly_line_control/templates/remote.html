@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en" class="remote-view">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Assembly Line OS – Remote</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        .remote-tap { min-height: 44px; }
+        .remote-section { margin-bottom: 1rem; }
+    </style>
+</head>
+<body class="remote-view min-h-screen bg-[var(--bg-page)] text-[var(--text-primary)] p-3 pb-6" style="font-family: 'JetBrains Mono', monospace;">
+    <div class="max-w-lg mx-auto">
+        <!-- Header -->
+        <header class="card px-3 py-2 mb-3 flex-shrink-0">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+                <h1 class="text-sm font-bold whitespace-nowrap">ASSEMBLY LINE OS – REMOTE</h1>
+                <p id="rosStatus" class="text-xs status-disconnected font-medium whitespace-nowrap">● DISCONNECTED</p>
+            </div>
+        </header>
+
+        <!-- Project selector -->
+        <section class="card p-3 remote-section">
+            <label class="block text-xs font-semibold text-[var(--text-muted)] mb-2">PROJECT</label>
+            <select id="projectSelect" class="w-full bg-[var(--bg-input)] border border-[var(--border-input)] rounded px-3 py-2 text-sm remote-tap">
+                <option value="">— Select project —</option>
+            </select>
+            <p id="projectName" class="text-xs text-[var(--text-muted)] mt-1 truncate"></p>
+        </section>
+
+        <!-- Execution sync status (live across all instances) -->
+        <p id="executionSyncStatus" class="text-xs text-[var(--text-muted)] mb-1 min-h-[1.25rem]"></p>
+        <!-- Start / Stop / E-Stop -->
+        <section class="card p-3 remote-section flex flex-wrap gap-2">
+            <button type="button" id="btnStart" onclick="startExecution()" class="btn-primary flex-1 min-w-[80px] py-3 text-sm font-medium rounded remote-tap">
+                ▶ START
+            </button>
+            <button type="button" id="btnStop" onclick="stopExecution()" class="btn-secondary flex-1 min-w-[80px] py-3 text-sm font-medium rounded remote-tap">
+                ⏹ STOP
+            </button>
+            <button type="button" id="btnEstop" onclick="emergencyStop()" class="btn-danger flex-1 min-w-[100px] py-3 text-sm font-bold rounded remote-tap" style="background: #dc2626;">
+                E-STOP
+            </button>
+        </section>
+
+        <!-- Motor 1 -->
+        <section class="card p-3 remote-section">
+            <div class="text-xs font-semibold text-[var(--text-muted)] mb-2" style="border-left: 3px solid #3b82f6; padding-left: 8px;">MOTOR 1</div>
+            <div class="flex flex-wrap gap-1 mb-2">
+                <button type="button" onclick="nudgeMotor(1, -100)" class="btn-secondary px-2 py-2 text-xs remote-tap">-100</button>
+                <button type="button" onclick="nudgeMotor(1, -50)" class="btn-secondary px-2 py-2 text-xs remote-tap">-50</button>
+                <button type="button" onclick="nudgeMotor(1, -10)" class="btn-secondary px-2 py-2 text-xs remote-tap">-10</button>
+                <button type="button" onclick="nudgeMotor(1, 10)" class="btn-secondary px-2 py-2 text-xs remote-tap">+10</button>
+                <button type="button" onclick="nudgeMotor(1, 50)" class="btn-secondary px-2 py-2 text-xs remote-tap">+50</button>
+                <button type="button" onclick="nudgeMotor(1, 100)" class="btn-secondary px-2 py-2 text-xs remote-tap">+100</button>
+            </div>
+            <div class="flex items-center gap-2 mb-2">
+                <input type="number" id="motor1StepsInput" value="100" min="-10000" max="10000" class="w-20 px-2 py-2 text-sm bg-[var(--bg-input)] border border-[var(--border-input)] rounded remote-tap">
+                <button type="button" onclick="moveMotorSteps(1)" class="btn-secondary px-3 py-2 text-xs remote-tap">MOVE</button>
+            </div>
+            <div class="flex gap-2">
+                <button type="button" id="motor1RunBackward" onclick="runMotor(1, -1)" class="btn-secondary flex-1 py-2 text-xs remote-tap">◀ BACK</button>
+                <button type="button" id="motor1Stop" onclick="stopMotor(1)" class="btn-danger flex-1 py-2 text-xs remote-tap" disabled style="opacity: 0.5;">STOP</button>
+                <button type="button" id="motor1RunForward" onclick="runMotor(1, 1)" class="btn-secondary flex-1 py-2 text-xs remote-tap">FORWARD ▶</button>
+            </div>
+        </section>
+
+        <!-- Motor 2 -->
+        <section class="card p-3 remote-section">
+            <div class="text-xs font-semibold text-[var(--text-muted)] mb-2" style="border-left: 3px solid #3b82f6; padding-left: 8px;">MOTOR 2</div>
+            <div class="flex flex-wrap gap-1 mb-2">
+                <button type="button" onclick="nudgeMotor(2, -100)" class="btn-secondary px-2 py-2 text-xs remote-tap">-100</button>
+                <button type="button" onclick="nudgeMotor(2, -50)" class="btn-secondary px-2 py-2 text-xs remote-tap">-50</button>
+                <button type="button" onclick="nudgeMotor(2, -10)" class="btn-secondary px-2 py-2 text-xs remote-tap">-10</button>
+                <button type="button" onclick="nudgeMotor(2, 10)" class="btn-secondary px-2 py-2 text-xs remote-tap">+10</button>
+                <button type="button" onclick="nudgeMotor(2, 50)" class="btn-secondary px-2 py-2 text-xs remote-tap">+50</button>
+                <button type="button" onclick="nudgeMotor(2, 100)" class="btn-secondary px-2 py-2 text-xs remote-tap">+100</button>
+            </div>
+            <div class="flex items-center gap-2 mb-2">
+                <input type="number" id="motor2StepsInput" value="100" min="-10000" max="10000" class="w-20 px-2 py-2 text-sm bg-[var(--bg-input)] border border-[var(--border-input)] rounded remote-tap">
+                <button type="button" onclick="moveMotorSteps(2)" class="btn-secondary px-3 py-2 text-xs remote-tap">MOVE</button>
+            </div>
+            <div class="flex gap-2">
+                <button type="button" id="motor2RunBackward" onclick="runMotor(2, -1)" class="btn-secondary flex-1 py-2 text-xs remote-tap">◀ BACK</button>
+                <button type="button" id="motor2Stop" onclick="stopMotor(2)" class="btn-danger flex-1 py-2 text-xs remote-tap" disabled style="opacity: 0.5;">STOP</button>
+                <button type="button" id="motor2RunForward" onclick="runMotor(2, 1)" class="btn-secondary flex-1 py-2 text-xs remote-tap">FORWARD ▶</button>
+            </div>
+        </section>
+
+        <!-- Both motors -->
+        <section class="card p-3 remote-section">
+            <div class="text-xs font-semibold text-[var(--text-muted)] mb-2" style="border-left: 3px solid #3b82f6; padding-left: 8px;">BOTH MOTORS</div>
+            <div class="flex flex-wrap gap-1 mb-2">
+                <button type="button" onclick="nudgeBothMotors(-100)" class="btn-secondary px-2 py-2 text-xs remote-tap">-100</button>
+                <button type="button" onclick="nudgeBothMotors(-50)" class="btn-secondary px-2 py-2 text-xs remote-tap">-50</button>
+                <button type="button" onclick="nudgeBothMotors(-10)" class="btn-secondary px-2 py-2 text-xs remote-tap">-10</button>
+                <button type="button" onclick="nudgeBothMotors(10)" class="btn-secondary px-2 py-2 text-xs remote-tap">+10</button>
+                <button type="button" onclick="nudgeBothMotors(50)" class="btn-secondary px-2 py-2 text-xs remote-tap">+50</button>
+                <button type="button" onclick="nudgeBothMotors(100)" class="btn-secondary px-2 py-2 text-xs remote-tap">+100</button>
+            </div>
+            <div class="flex items-center gap-2 mb-2">
+                <input type="number" id="bothMotorsStepsInput" value="100" min="-10000" max="10000" class="w-20 px-2 py-2 text-sm bg-[var(--bg-input)] border border-[var(--border-input)] rounded remote-tap">
+                <button type="button" onclick="moveBothMotorsSteps()" class="btn-secondary px-3 py-2 text-xs remote-tap">MOVE</button>
+            </div>
+            <div class="flex gap-2">
+                <button type="button" id="bothMotorsRunBackward" onclick="runBothMotors(-1)" class="btn-secondary flex-1 py-2 text-xs remote-tap">◀ BACK</button>
+                <button type="button" id="bothMotorsStop" onclick="stopBothMotors()" class="btn-danger flex-1 py-2 text-xs remote-tap" disabled style="opacity: 0.5;">STOP</button>
+                <button type="button" id="bothMotorsRunForward" onclick="runBothMotors(1)" class="btn-secondary flex-1 py-2 text-xs remote-tap">FORWARD ▶</button>
+            </div>
+        </section>
+
+        <!-- Relays -->
+        <section class="card p-3 remote-section">
+            <div class="text-xs font-semibold text-[var(--text-muted)] mb-2" style="border-left: 3px solid #f59e0b; padding-left: 8px;">RELAYS</div>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="flex gap-1">
+                    <span class="text-xs py-2 w-14">R1</span>
+                    <button type="button" id="relay1Off" onclick="setRelay(1, 'off')" class="btn-secondary flex-1 py-2 text-xs remote-tap">OFF</button>
+                    <button type="button" id="relay1On" onclick="setRelay(1, 'on')" class="btn-success flex-1 py-2 text-xs remote-tap">ON</button>
+                </div>
+                <div class="flex gap-1">
+                    <span class="text-xs py-2 w-14">R2</span>
+                    <button type="button" id="relay2Off" onclick="setRelay(2, 'off')" class="btn-secondary flex-1 py-2 text-xs remote-tap">OFF</button>
+                    <button type="button" id="relay2On" onclick="setRelay(2, 'on')" class="btn-success flex-1 py-2 text-xs remote-tap">ON</button>
+                </div>
+                <div class="flex gap-1">
+                    <span class="text-xs py-2 w-14">R3</span>
+                    <button type="button" id="relay3Off" onclick="setRelay(3, 'off')" class="btn-secondary flex-1 py-2 text-xs remote-tap">OFF</button>
+                    <button type="button" id="relay3On" onclick="setRelay(3, 'on')" class="btn-success flex-1 py-2 text-xs remote-tap">ON</button>
+                </div>
+                <div class="flex gap-1">
+                    <span class="text-xs py-2 w-14">R4</span>
+                    <button type="button" id="relay4Off" onclick="setRelay(4, 'off')" class="btn-secondary flex-1 py-2 text-xs remote-tap">OFF</button>
+                    <button type="button" id="relay4On" onclick="setRelay(4, 'on')" class="btn-success flex-1 py-2 text-xs remote-tap">ON</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Log (optional, compact) -->
+        <section class="card p-2 remote-section">
+            <div id="logArea" class="text-xs max-h-24 overflow-y-auto text-[var(--text-muted)] space-y-0.5"></div>
+        </section>
+    </div>
+
+    <script>
+        window.ROS_BRIDGE_URL = '{{ rosbridge_url|default("ws://localhost:9090") }}';
+    </script>
+    <script src="{{ url_for('static', filename='js/config.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/uiUtils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/rosBridge.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/motorSpeedManager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/workflowManager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/blockConnector.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/storageManager.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/executionEngine.js') }}"></script>
+    <script>
+        const manualControlState = { runningMotors: new Set() };
+        let currentProjectId = null;
+
+        function log(msg, type) {
+            if (typeof UIUtils !== 'undefined') UIUtils.log(msg, type || 'info');
+        }
+
+        async function loadProjectList() {
+            const select = document.getElementById('projectSelect');
+            if (!select) return;
+            try {
+                const res = await fetch('/api/projects');
+                const data = await res.json();
+                const projects = data.projects || [];
+                select.innerHTML = '<option value="">— Select project —</option>';
+                projects.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.name || p.id;
+                    select.appendChild(opt);
+                });
+            } catch (e) {
+                log('Failed to load projects: ' + e.message, 'error');
+            }
+        }
+
+        async function onProjectChange() {
+            const select = document.getElementById('projectSelect');
+            const nameEl = document.getElementById('projectName');
+            const id = select ? select.value : '';
+            currentProjectId = id || null;
+            if (nameEl) nameEl.textContent = '';
+            if (!id) return;
+            try {
+                const res = await fetch('/api/projects/' + encodeURIComponent(id));
+                if (!res.ok) throw new Error(res.statusText);
+                const data = await res.json();
+                if (typeof StorageManager !== 'undefined' && StorageManager.applyConfigHeadless) {
+                    StorageManager.applyConfigHeadless(data);
+                    log('Project loaded: ' + (data.name || id), 'success');
+                }
+                if (nameEl) nameEl.textContent = data.name || id;
+            } catch (e) {
+                log('Failed to load project: ' + e.message, 'error');
+            }
+        }
+
+        function nudgeMotor(motorId, steps) {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            if (ROSBridge.publishManualMotorCommand(motorId, steps)) log('Motor ' + motorId + ': ' + (steps > 0 ? '+' : '') + steps + ' steps', 'success');
+        }
+
+        function moveMotorSteps(motorId) {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            const input = document.getElementById('motor' + motorId + 'StepsInput');
+            const steps = input ? (parseInt(input.value, 10) || 0) : 0;
+            if (steps === 0) { log('Enter non-zero steps', 'error'); return; }
+            if (ROSBridge.publishManualMotorCommand(motorId, steps)) log('Motor ' + motorId + ': ' + steps + ' steps', 'success');
+        }
+
+        function runMotor(motorId, direction) {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            const steps = direction > 0 ? 10000 : -10000;
+            if (ROSBridge.publishManualMotorCommand(motorId, steps)) {
+                manualControlState.runningMotors.add(motorId);
+                updateMotorRunButtons(motorId);
+                updateBothMotorsRunButtons();
+                log('Motor ' + motorId + ' running ' + (direction > 0 ? 'forward' : 'backward'), 'success');
+            }
+        }
+
+        function stopMotor(motorId) {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            if (ROSBridge.publishMotorCommand(motorId, 0)) {
+                manualControlState.runningMotors.delete(motorId);
+                updateMotorRunButtons(motorId);
+                updateBothMotorsRunButtons();
+                log('Motor ' + motorId + ' stopped', 'warning');
+            }
+        }
+
+        function updateMotorRunButtons(motorId) {
+            const running = manualControlState.runningMotors.has(motorId);
+            const fwd = document.getElementById('motor' + motorId + 'RunForward');
+            const bwd = document.getElementById('motor' + motorId + 'RunBackward');
+            const stop = document.getElementById('motor' + motorId + 'Stop');
+            if (fwd) { fwd.disabled = running; fwd.style.opacity = running ? '0.5' : '1'; }
+            if (bwd) { bwd.disabled = running; bwd.style.opacity = running ? '0.5' : '1'; }
+            if (stop) { stop.disabled = !running; stop.style.opacity = running ? '1' : '0.5'; }
+        }
+
+        function nudgeBothMotors(steps) {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            ROSBridge.publishManualMotorCommand(1, steps);
+            ROSBridge.publishManualMotorCommand(2, steps);
+            log('Both motors: ' + (steps > 0 ? '+' : '') + steps + ' steps', 'success');
+        }
+
+        function moveBothMotorsSteps() {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            const input = document.getElementById('bothMotorsStepsInput');
+            const steps = input ? (parseInt(input.value, 10) || 0) : 0;
+            if (steps === 0) { log('Enter non-zero steps', 'error'); return; }
+            ROSBridge.publishManualMotorCommand(1, steps);
+            ROSBridge.publishManualMotorCommand(2, steps);
+            log('Both motors: ' + steps + ' steps', 'success');
+        }
+
+        function runBothMotors(direction) {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            const steps = direction > 0 ? 10000 : -10000;
+            ROSBridge.publishManualMotorCommand(1, steps);
+            ROSBridge.publishManualMotorCommand(2, steps);
+            manualControlState.runningMotors.add(1);
+            manualControlState.runningMotors.add(2);
+            updateMotorRunButtons(1);
+            updateMotorRunButtons(2);
+            updateBothMotorsRunButtons();
+            log('Both motors running ' + (direction > 0 ? 'forward' : 'backward'), 'success');
+        }
+
+        function stopBothMotors() {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            ROSBridge.publishMotorCommand(1, 0);
+            ROSBridge.publishMotorCommand(2, 0);
+            manualControlState.runningMotors.delete(1);
+            manualControlState.runningMotors.delete(2);
+            updateMotorRunButtons(1);
+            updateMotorRunButtons(2);
+            updateBothMotorsRunButtons();
+            log('Both motors stopped', 'warning');
+        }
+
+        function updateBothMotorsRunButtons() {
+            const r1 = manualControlState.runningMotors.has(1);
+            const r2 = manualControlState.runningMotors.has(2);
+            const any = r1 || r2;
+            const fwd = document.getElementById('bothMotorsRunForward');
+            const bwd = document.getElementById('bothMotorsRunBackward');
+            const stop = document.getElementById('bothMotorsStop');
+            if (fwd) { fwd.disabled = any; fwd.style.opacity = any ? '0.5' : '1'; }
+            if (bwd) { bwd.disabled = any; bwd.style.opacity = any ? '0.5' : '1'; }
+            if (stop) { stop.disabled = !any; stop.style.opacity = any ? '1' : '0.5'; }
+        }
+
+        function setRelay(relayId, state) {
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            if (ROSBridge.publishRelayCommand(relayId, state)) {
+                log('Relay ' + relayId + ': ' + state.toUpperCase(), 'success');
+                updateRelayButtons(relayId, state);
+            }
+        }
+
+        function updateRelayButtons(relayId, state) {
+            const onBtn = document.getElementById('relay' + relayId + 'On');
+            const offBtn = document.getElementById('relay' + relayId + 'Off');
+            if (!onBtn || !offBtn) return;
+            onBtn.classList.remove('opacity-75');
+            offBtn.classList.remove('opacity-75');
+            onBtn.style.border = '';
+            offBtn.style.border = '';
+            if (state === 'on') {
+                onBtn.classList.add('opacity-75');
+                onBtn.style.border = '2px solid #10b981';
+            } else {
+                offBtn.classList.add('opacity-75');
+                offBtn.style.border = '2px solid #3a3a3a';
+            }
+        }
+
+        function startExecution() {
+            if (!currentProjectId) { log('Select a project first', 'error'); return; }
+            if (typeof ExecutionEngine === 'undefined') { log('Execution engine not ready', 'error'); return; }
+            if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
+            ROSBridge.publishExecutionState(true, currentProjectId);
+            ROSBridge.startExecutionStateHeartbeat(currentProjectId);
+            ExecutionEngine.start().then(function() {
+                ROSBridge.stopExecutionStateHeartbeat();
+                ROSBridge.publishExecutionState(false, currentProjectId);
+            }).catch(function() {
+                ROSBridge.stopExecutionStateHeartbeat();
+                ROSBridge.publishExecutionState(false, currentProjectId);
+            });
+        }
+
+        function stopExecution() {
+            if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+                ROSBridge.stopExecutionStateHeartbeat();
+                ExecutionEngine.stop();
+                ROSBridge.publishExecutionState(false, currentProjectId);
+                log('Execution stopped', 'warning');
+            } else {
+                ROSBridge.publishStopRequest();
+                log('Stop requested from another device', 'warning');
+            }
+        }
+
+        function emergencyStop() {
+            log('E-STOP activated', 'error');
+            if (typeof ROSBridge !== 'undefined') {
+                ROSBridge.emergencyStop();
+                ROSBridge.stopExecutionStateHeartbeat();
+                if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+                    ExecutionEngine.stop();
+                    ROSBridge.publishExecutionState(false, currentProjectId);
+                } else {
+                    ROSBridge.publishStopRequest();
+                }
+            }
+            if (typeof ExecutionEngine !== 'undefined') ExecutionEngine.stop();
+            log('All systems stopped', 'error');
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            if (typeof WorkflowManager !== 'undefined') WorkflowManager.init();
+            if (typeof ROSBridge !== 'undefined') {
+                ROSBridge.init();
+                window.onExecutionStateUpdate = function(state) {
+                    var el = document.getElementById('executionSyncStatus');
+                    var btnStart = document.getElementById('btnStart');
+                    var btnStop = document.getElementById('btnStop');
+                    var myId = ROSBridge.getClientId();
+                    if (state.running) {
+                        if (state.clientId === myId) {
+                            if (el) { el.textContent = 'Running (this device)'; el.className = 'text-xs text-green-400 mb-1 min-h-[1.25rem]'; }
+                        } else {
+                            if (el) { el.textContent = 'Running (another device) – tap STOP to request stop'; el.className = 'text-xs text-yellow-400 mb-1 min-h-[1.25rem]'; }
+                        }
+                        if (btnStart) btnStart.disabled = true;
+                        if (btnStop) btnStop.disabled = false;
+                    } else {
+                        if (el) { el.textContent = ''; el.className = 'text-xs text-[var(--text-muted)] mb-1 min-h-[1.25rem]'; }
+                        if (btnStart) btnStart.disabled = false;
+                        if (btnStop) btnStop.disabled = false;
+                    }
+                };
+                if (ROSBridge.executionSyncState && ROSBridge.executionSyncState.running) {
+                    window.onExecutionStateUpdate(ROSBridge.executionSyncState);
+                }
+            }
+            loadProjectList();
+            var select = document.getElementById('projectSelect');
+            if (select) select.addEventListener('change', onProjectChange);
+            updateMotorRunButtons(1);
+            updateMotorRunButtons(2);
+            updateBothMotorsRunButtons();
+        });
+    </script>
+</body>
+</html>
