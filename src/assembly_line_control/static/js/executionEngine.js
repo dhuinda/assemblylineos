@@ -236,10 +236,18 @@ const ExecutionEngine = {
                 const motorSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
                 const speedLabel = hasCustomSpeed ? 'custom' : 'global';
                 
-                const success = ROSBridge.publishMotorCommand(block.motor_id, block.steps || 0, motorSpeed);
+                // Apply direction: backward negates steps (legacy: no direction = use steps as-is)
+                let steps = block.steps || 0;
+                if (block.direction === 'backward') {
+                    steps = -Math.abs(steps);
+                } else if (block.direction === 'forward') {
+                    steps = Math.abs(steps);
+                }
+                
+                const success = ROSBridge.publishMotorCommand(block.motor_id, steps, motorSpeed);
                 if (success) {
-                    const duration = motorSpeed > 0 ? (Math.abs(block.steps || 0) / motorSpeed) : 0;
-                    UIUtils.log(`  → Motor ${block.motor_id}: ${block.steps || 0} steps (${duration.toFixed(2)}s @ ${motorSpeed} sps ${speedLabel})`, 'success');
+                    const duration = motorSpeed > 0 ? (Math.abs(steps) / motorSpeed) : 0;
+                    UIUtils.log(`  → Motor ${block.motor_id}: ${steps > 0 ? '+' : ''}${steps} steps (${duration.toFixed(2)}s @ ${motorSpeed} sps ${speedLabel})`, 'success');
                     // Wait for motor to complete - parallel branches will wait concurrently via Promise.all
                     await this.sleep(duration * 1000);
                 }
@@ -651,9 +659,17 @@ const ExecutionEngine = {
                 const motorSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
                 const speedLabel = hasCustomSpeed ? 'custom' : 'global';
                 
+                // Apply direction for display (effective steps)
+                let effectiveSteps = block.steps || 0;
+                if (block.direction === 'backward') {
+                    effectiveSteps = -Math.abs(effectiveSteps);
+                } else if (block.direction === 'forward' || !block.direction) {
+                    effectiveSteps = Math.abs(effectiveSteps);
+                }
+                
                 const motorStatus = ROSBridge.getMotorStatus(block.motor_id);
                 const stepsRemaining = motorStatus ? motorStatus.steps_remaining : null;
-                const totalSteps = block.steps || 0;
+                const totalSteps = effectiveSteps;
                 
                 // Calculate estimated duration and remaining time
                 estimatedDuration = motorSpeed > 0 ? (Math.abs(totalSteps) / motorSpeed) : 0;
@@ -1046,7 +1062,13 @@ const ExecutionEngine = {
                 if (block.type === 'motor') {
                     const hasCustomSpeed = block.speed !== undefined && block.speed !== null;
                     const motorSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
-                    duration = motorSpeed > 0 ? Math.abs(block.steps || 0) / motorSpeed : 0.01;
+                    let effectiveSteps = block.steps || 0;
+                    if (block.direction === 'backward') {
+                        effectiveSteps = -Math.abs(effectiveSteps);
+                    } else {
+                        effectiveSteps = Math.abs(effectiveSteps);
+                    }
+                    duration = motorSpeed > 0 ? Math.abs(effectiveSteps) / motorSpeed : 0.01;
                 } else if (block.type === 'delay') {
                     duration = block.duration || 1.0;
                 } else if (block.type === 'pause') {

@@ -276,8 +276,8 @@ def get_default_settings():
     """Get default pin configuration."""
     return {
         "motors": [
-            {"id": 1, "step_pin": 2, "dir_pin": 3},
-            {"id": 2, "step_pin": 5, "dir_pin": 6}
+            {"id": 1, "step_pin": 2, "dir_pin": 3, "invert_direction": False},
+            {"id": 2, "step_pin": 5, "dir_pin": 6, "invert_direction": False}
         ],
         "relays": [
             {"id": 1, "pin": 54},  # A0 on Arduino Giga

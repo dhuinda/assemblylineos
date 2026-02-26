@@ -35,6 +35,11 @@ int MOTOR_PINS[2][2] = {
 // Relay pin definitions - can be reconfigured via serial
 int RELAY_PINS[4] = {A0, A1, A2, A3};  // Default: A0-A3 (pins 54-57)
 
+// Relay logic: typical boards are active-LOW (LOW = relay ON, HIGH = relay OFF).
+// If your relays turn ON at power-up, try swapping: set RELAY_OFF_LEVEL to LOW and RELAY_ON_LEVEL to HIGH.
+#define RELAY_OFF_LEVEL HIGH
+#define RELAY_ON_LEVEL  LOW
+
 // Custom pins - for user-defined I/O
 #define MAX_CUSTOM_PINS 16
 struct CustomPin {
@@ -61,10 +66,14 @@ MotorState motors[2];
 // Motor speeds (steps per second) - default values
 float motor_speeds[2] = {100.0, 100.0};
 
+// Per-motor direction inversion (flip DIR pin logic when true)
+bool motor_invert_direction[2] = {false, false};
+
 // Relay states
 bool relay_states[4] = {false, false, false, false};
 
 // Serial communication
+#define SERIAL_BUFFER_MAX 512
 String serialBuffer = "";
 
 // Minimum step interval in microseconds (for maximum speed protection)
@@ -73,10 +82,13 @@ const unsigned long MIN_STEP_INTERVAL = 50; // 2000 us = 500 steps/sec max
 void setup() {
   // Initialize serial communication
   Serial.begin(115200);
-  while (!Serial) {
-    ; // Wait for serial port to connect (only needed for native USB)
+  // Do NOT block on while(!Serial) - when the Pi opens the port we must already be in loop()
+  // so we can process commands. Wait at most 3 seconds for Serial (e.g. for serial monitor).
+  unsigned long serialWaitStart = millis();
+  while (!Serial && (millis() - serialWaitStart < 3000)) {
+    ;
   }
-  delay(1000); // Give time for serial to stabilize
+  delay(500); // Brief stabilization
   Serial.println("Arduino Giga Assembly Line Control Ready");
   Serial.println("Configuration: 2 stepper motors, 4 relays");
   
@@ -98,10 +110,10 @@ void setup() {
     motors[i].step_interval = calculateStepInterval(motor_speeds[i]);
   }
   
-  // Initialize relay pins (HIGH = off, LOW = on for typical active-low relay modules)
+  // Initialize relay pins to OFF as early as possible (avoids brief on-state on some boards)
   for (int i = 0; i < 4; i++) {
     pinMode(RELAY_PINS[i], OUTPUT);
-    digitalWrite(RELAY_PINS[i], HIGH); // Start with all relays OFF
+    digitalWrite(RELAY_PINS[i], RELAY_OFF_LEVEL);
     relay_states[i] = false;
   }
   
@@ -119,7 +131,7 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH); // LED on = ready
   
   // Clear serial buffer
-  serialBuffer.reserve(256);
+  serialBuffer.reserve(SERIAL_BUFFER_MAX);
   
   Serial.println("Initialization complete");
   Serial.println("Waiting for commands...");
@@ -137,12 +149,25 @@ void readSerialCommands() {
   while (Serial.available() > 0) {
     char inChar = Serial.read();
     
-    if (inChar == '\n') {
+    if (inChar == '\n' || inChar == '\r') {
       // Process complete command
-      processCommand(serialBuffer);
+      if (serialBuffer.length() > 0) {
+        processCommand(serialBuffer);
+      }
       serialBuffer = "";
     } else {
-      serialBuffer += inChar;
+      if (serialBuffer.length() < SERIAL_BUFFER_MAX) {
+        serialBuffer += inChar;
+      }
+      // If buffer overflows, discard and reset to avoid memory exhaustion / hang
+      else {
+        serialBuffer = "";
+        // Discard rest of line so we don't start mid-command
+        while (Serial.available() > 0) {
+          char c = Serial.read();
+          if (c == '\n' || c == '\r') break;
+        }
+      }
     }
   }
 }
@@ -191,7 +216,7 @@ void processEStopCommand() {
   // Turn off all relays
   for (int i = 0; i < 4; i++) {
     relay_states[i] = false;
-    digitalWrite(RELAY_PINS[i], LOW);
+    digitalWrite(RELAY_PINS[i], RELAY_OFF_LEVEL);
   }
   
   // Visual feedback - set LED to LOW to indicate E-STOP (non-blocking)
@@ -247,6 +272,9 @@ void processConfigCommand(String command) {
               MOTOR_PINS[motorIndex][0] = stepPin;
               MOTOR_PINS[motorIndex][1] = dirPin;
               
+              // Parse invert_direction (optional, default false)
+              motor_invert_direction[motorIndex] = (motorConfig.indexOf("\"invert_direction\":true") >= 0 || motorConfig.indexOf("\"invert_direction\": true") >= 0);
+              
               // Reinitialize pins
               pinMode(MOTOR_PINS[motorIndex][0], OUTPUT);
               pinMode(MOTOR_PINS[motorIndex][1], OUTPUT);
@@ -261,7 +289,9 @@ void processConfigCommand(String command) {
               Serial.print(" -> STEP=");
               Serial.print(stepPin);
               Serial.print(", DIR=");
-              Serial.println(dirPin);
+              Serial.print(dirPin);
+              Serial.print(", invert=");
+              Serial.println(motor_invert_direction[motorIndex] ? 1 : 0);
             }
           }
         }
@@ -301,7 +331,7 @@ void processConfigCommand(String command) {
               
               // Reinitialize pin
               pinMode(RELAY_PINS[relayIndex], OUTPUT);
-              digitalWrite(RELAY_PINS[relayIndex], relay_states[relayIndex] ? HIGH : LOW);
+              digitalWrite(RELAY_PINS[relayIndex], relay_states[relayIndex] ? RELAY_ON_LEVEL : RELAY_OFF_LEVEL);
               
               Serial.print("CONFIG: Relay ");
               Serial.print(relayId);
@@ -432,8 +462,9 @@ void processMotorCommand(String command) {
     motors[motor_index].direction = (steps > 0);
     motors[motor_index].last_step_time = micros();
     
-    // Set direction pin
-    digitalWrite(MOTOR_PINS[motor_index][1], motors[motor_index].direction ? HIGH : LOW);
+    // Set direction pin (apply invert if configured)
+    bool effective_dir = motors[motor_index].direction ^ motor_invert_direction[motor_index];
+    digitalWrite(MOTOR_PINS[motor_index][1], effective_dir ? HIGH : LOW);
     
     // Visual feedback - set LED HIGH when motor starts (non-blocking)
     digitalWrite(LED_BUILTIN, HIGH);
@@ -466,13 +497,13 @@ void processRelayCommand(String command) {
   state.toLowerCase();
   
   if (state == "on") {
-    digitalWrite(RELAY_PINS[relay_index], LOW);
+    digitalWrite(RELAY_PINS[relay_index], RELAY_ON_LEVEL);
     relay_states[relay_index] = true;
     Serial.print("OK: Relay ");
     Serial.print(relay_id);
     Serial.println(" ON");
   } else if (state == "off") {
-    digitalWrite(RELAY_PINS[relay_index], HIGH);
+    digitalWrite(RELAY_PINS[relay_index], RELAY_OFF_LEVEL);
     relay_states[relay_index] = false;
     Serial.print("OK: Relay ");
     Serial.print(relay_id);
@@ -495,7 +526,8 @@ void updateMotors() {
       bool new_direction = (motors[i].steps_remaining > 0);
       if (motors[i].direction != new_direction) {
         motors[i].direction = new_direction;
-        digitalWrite(MOTOR_PINS[i][1], motors[i].direction ? HIGH : LOW);
+        bool effective_dir = motors[i].direction ^ motor_invert_direction[i];
+        digitalWrite(MOTOR_PINS[i][1], effective_dir ? HIGH : LOW);
       }
       
       // Check if it's time to take a step

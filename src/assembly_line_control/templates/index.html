@@ -152,16 +152,28 @@
                                     </div>
                                     <div class="palette-section-content space-y-2">
                                         <div class="block block-motor card p-2" data-type="motor" data-motor-id="1" draggable="true">
-                                            <div class="flex items-center justify-between">
-                                                <span class="accent-motor font-medium text-xs">MOTOR 1</span>
-                                                <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
+                                            <div class="flex flex-col gap-2">
+                                                <div class="flex items-center justify-between">
+                                                    <span class="accent-motor font-medium text-xs">MOTOR 1</span>
+                                                    <select class="px-2 py-1 text-xs text-white accent-motor" data-param="direction">
+                                                        <option value="forward">Fwd</option>
+                                                        <option value="backward">Bwd</option>
+                                                    </select>
+                                                </div>
+                                                <input type="number" class="w-full px-2 py-1 text-xs text-white accent-motor" 
                                                        placeholder="steps" data-param="steps" value="0">
                                             </div>
                                         </div>
                                         <div class="block block-motor card p-2" data-type="motor" data-motor-id="2" draggable="true">
-                                            <div class="flex items-center justify-between">
-                                                <span class="accent-motor font-medium text-xs">MOTOR 2</span>
-                                                <input type="number" class="w-14 px-2 py-1 text-xs text-white accent-motor" 
+                                            <div class="flex flex-col gap-2">
+                                                <div class="flex items-center justify-between">
+                                                    <span class="accent-motor font-medium text-xs">MOTOR 2</span>
+                                                    <select class="px-2 py-1 text-xs text-white accent-motor" data-param="direction">
+                                                        <option value="forward">Fwd</option>
+                                                        <option value="backward">Bwd</option>
+                                                    </select>
+                                                </div>
+                                                <input type="number" class="w-full px-2 py-1 text-xs text-white accent-motor" 
                                                        placeholder="steps" data-param="steps" value="0">
                                             </div>
                                         </div>
@@ -653,6 +665,10 @@
                                     <span class="settings-field-label">DIR</span>
                                     <input type="number" id="motor1DirPin" class="settings-input" min="0" max="99" value="3">
                                 </div>
+                                <div class="settings-field">
+                                    <label class="settings-field-label">Invert Dir</label>
+                                    <input type="checkbox" id="motor1InvertDir" class="settings-input" title="Reverse physical direction for this motor">
+                                </div>
                             </div>
                         </div>
                         <div class="settings-group">
@@ -665,6 +681,10 @@
                                 <div class="settings-field">
                                     <span class="settings-field-label">DIR</span>
                                     <input type="number" id="motor2DirPin" class="settings-input" min="0" max="99" value="6">
+                                </div>
+                                <div class="settings-field">
+                                    <label class="settings-field-label">Invert Dir</label>
+                                    <input type="checkbox" id="motor2InvertDir" class="settings-input" title="Reverse physical direction for this motor">
                                 </div>
                             </div>
                         </div>
@@ -864,7 +884,8 @@
             MotorSpeedManager.setSpeed(motorId, speed);
         }
 
-        // Manual motor controls
+        // Manual motor controls — continuous run uses a very high step count until STOP
+        const MANUAL_RUN_STEPS = 2000000000; // ~2e9 steps = effectively "run until stop"
         const manualControlState = {
             runningMotors: new Set() // Track which motors are running continuously
         };
@@ -948,9 +969,11 @@
                 UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
                 return;
             }
-            const steps = direction > 0 ? 10000 : -10000;
-            const success1 = ROSBridge.publishManualMotorCommand(1, steps);
-            const success2 = ROSBridge.publishManualMotorCommand(2, steps);
+            const steps = direction > 0 ? MANUAL_RUN_STEPS : -MANUAL_RUN_STEPS;
+            const speed1 = typeof MotorSpeedManager !== 'undefined' ? MotorSpeedManager.getSpeed(1) : 100;
+            const speed2 = typeof MotorSpeedManager !== 'undefined' ? MotorSpeedManager.getSpeed(2) : 100;
+            const success1 = ROSBridge.publishManualMotorCommand(1, steps, speed1);
+            const success2 = ROSBridge.publishManualMotorCommand(2, steps, speed2);
             if (success1 && success2) {
                 manualControlState.runningMotors.add(1);
                 manualControlState.runningMotors.add(2);
@@ -1007,9 +1030,9 @@
                 UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
                 return;
             }
-            // Use a large step count for continuous running
-            const steps = direction > 0 ? 10000 : -10000;
-            const success = ROSBridge.publishManualMotorCommand(motorId, steps);
+            const steps = direction > 0 ? MANUAL_RUN_STEPS : -MANUAL_RUN_STEPS;
+            const speed = typeof MotorSpeedManager !== 'undefined' ? MotorSpeedManager.getSpeed(motorId) : 100;
+            const success = ROSBridge.publishManualMotorCommand(motorId, steps, speed);
             if (success) {
                 manualControlState.runningMotors.add(motorId);
                 updateMotorRunButtons(motorId);

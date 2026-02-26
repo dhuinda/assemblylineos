@@ -9,8 +9,8 @@ const SettingsManager = {
     // Default pin configuration
     defaultConfig: {
         motors: [
-            { id: 1, step_pin: 2, dir_pin: 3 },
-            { id: 2, step_pin: 5, dir_pin: 6 }
+            { id: 1, step_pin: 2, dir_pin: 3, invert_direction: false },
+            { id: 2, step_pin: 5, dir_pin: 6, invert_direction: false }
         ],
         relays: [
             { id: 1, pin: 54 },  // A0 on Arduino Giga
@@ -77,8 +77,10 @@ const SettingsManager = {
             if (motor) {
                 const stepInput = document.getElementById(`motor${i}StepPin`);
                 const dirInput = document.getElementById(`motor${i}DirPin`);
+                const invertInput = document.getElementById(`motor${i}InvertDir`);
                 if (stepInput) stepInput.value = motor.step_pin;
                 if (dirInput) dirInput.value = motor.dir_pin;
+                if (invertInput) invertInput.checked = motor.invert_direction === true;
             }
         }
         
@@ -163,10 +165,12 @@ const SettingsManager = {
         for (let i = 1; i <= 2; i++) {
             const stepInput = document.getElementById(`motor${i}StepPin`);
             const dirInput = document.getElementById(`motor${i}DirPin`);
+            const invertInput = document.getElementById(`motor${i}InvertDir`);
             config.motors.push({
                 id: i,
                 step_pin: parseInt(stepInput?.value) || 0,
-                dir_pin: parseInt(dirInput?.value) || 0
+                dir_pin: parseInt(dirInput?.value) || 0,
+                invert_direction: invertInput?.checked === true
             });
         }
         

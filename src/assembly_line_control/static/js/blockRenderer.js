@@ -191,7 +191,10 @@ const BlockRenderer = {
             // Use custom speed if set, otherwise use global speed
             const hasCustomSpeed = blockData.speed !== undefined && blockData.speed !== null;
             const motorSpeed = hasCustomSpeed ? blockData.speed : MotorSpeedManager.getSpeed(blockData.motor_id);
-            const duration = motorSpeed > 0 ? (Math.abs(blockData.steps || 0) / motorSpeed).toFixed(2) : '0.00';
+            // Support legacy blocks: infer direction from steps sign if direction not set
+            const direction = blockData.direction || (blockData.steps < 0 ? 'backward' : 'forward');
+            const effectiveSteps = direction === 'backward' ? -Math.abs(blockData.steps || 0) : Math.abs(blockData.steps || 0);
+            const duration = motorSpeed > 0 ? (Math.abs(effectiveSteps) / motorSpeed).toFixed(2) : '0.00';
             const speedLabel = hasCustomSpeed ? 'custom' : 'global';
             return `
                 <div class="flex flex-col gap-1" style="font-size: 10px;">
@@ -199,10 +202,17 @@ const BlockRenderer = {
                         <span class="block-id-badge">#${blockData.id}</span>
                         <div class="font-semibold accent-motor">M${blockData.motor_id}</div>
                     </div>
-                    <input type="number" class="w-full px-1 py-0.5 text-xs text-white accent-motor" 
-                           placeholder="steps" data-param="steps" value="${blockData.steps || 0}"
-                           onclick="event.stopPropagation()"
-                           style="max-width: 100%;">
+                    <div class="flex flex-col gap-1">
+                        <select class="w-full px-1 py-0.5 text-xs text-white accent-motor" data-param="direction"
+                                onclick="event.stopPropagation()">
+                            <option value="forward" ${direction === 'forward' ? 'selected' : ''}>Forward</option>
+                            <option value="backward" ${direction === 'backward' ? 'selected' : ''}>Backward</option>
+                        </select>
+                        <input type="number" class="w-full px-1 py-0.5 text-xs text-white accent-motor" 
+                               placeholder="steps" data-param="steps" value="${Math.abs(blockData.steps || 0)}"
+                               onclick="event.stopPropagation()"
+                               style="max-width: 100%;">
+                    </div>
                     <div class="flex items-center gap-1">
                         <input type="number" class="w-16 px-1 py-0.5 text-xs text-white accent-motor" 
                                placeholder="speed" data-param="speed" value="${hasCustomSpeed ? blockData.speed : ''}"

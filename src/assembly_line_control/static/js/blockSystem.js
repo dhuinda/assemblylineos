@@ -42,7 +42,10 @@ const BlockSystem = {
                 
                 const stepsInput = blockElement.querySelector('[data-param="steps"]');
                 const steps = stepsInput ? parseInt(stepsInput.value) || 0 : 0;
-                data.steps = this.validateSteps(steps);
+                data.steps = this.validateSteps(Math.abs(steps));
+                
+                const directionSelect = blockElement.querySelector('[data-param="direction"]');
+                data.direction = directionSelect ? (directionSelect.value || 'forward') : 'forward';
                 
                 // Check for custom speed
                 const speedInput = blockElement.querySelector('[data-param="speed"]');
@@ -259,7 +262,15 @@ const BlockSystem = {
             block.eventType = templateData.eventType || 'green-flag';
         } else if (templateData.type === 'motor') {
             block.motor_id = templateData.motor_id;
-            block.steps = this.validateSteps(templateData.steps || 0);
+            // Normalize: store positive steps, direction controls sign; support legacy negative steps
+            const rawSteps = templateData.steps || 0;
+            if (rawSteps < 0 && !templateData.direction) {
+                block.direction = 'backward';
+                block.steps = this.validateSteps(Math.abs(rawSteps));
+            } else {
+                block.direction = templateData.direction || 'forward';
+                block.steps = this.validateSteps(Math.abs(rawSteps));
+            }
             // Preserve custom speed if set
             if (templateData.speed !== undefined && templateData.speed !== null) {
                 block.speed = this.validateSpeed(templateData.speed);
@@ -340,7 +351,7 @@ const BlockSystem = {
             // Has: header + one input field
             baseHeight = 120; // 6 grid units -> will become 7 (odd) = 140px
         } else if (blockData.type === 'motor') {
-            baseHeight = 140; // 7 grid units = 140px (has steps + speed inputs + duration display)
+            baseHeight = 160; // 8 grid units = 160px (has direction + steps + speed inputs + duration display + padding)
         } else if (blockData.type === 'relay' || blockData.type === 'delay' || blockData.type === 'repeat') {
             baseHeight = 100; // 5 grid units (already odd) = 100px
         } else if (blockData.type === 'event') {
@@ -374,9 +385,13 @@ const BlockSystem = {
             } else if (blockData.type === 'motor') {
                 const stepsInput = blockEl.querySelector('[data-param="steps"]');
                 const speedInput = blockEl.querySelector('[data-param="speed"]');
+                const directionSelect = blockEl.querySelector('[data-param="direction"]');
                 
                 if (stepsInput) {
-                    blockData.steps = this.validateSteps(parseInt(stepsInput.value) || 0);
+                    blockData.steps = this.validateSteps(Math.abs(parseInt(stepsInput.value) || 0));
+                }
+                if (directionSelect) {
+                    blockData.direction = directionSelect.value || 'forward';
                 }
                 
                 // Handle custom speed
@@ -393,10 +408,11 @@ const BlockSystem = {
                     }
                 }
                 
-                // Determine which speed to display
+                // Determine which speed to display (use effective steps for duration)
                 const hasCustomSpeed = blockData.speed !== undefined && blockData.speed !== null;
                 const motorSpeed = hasCustomSpeed ? blockData.speed : MotorSpeedManager.getSpeed(blockData.motor_id);
-                const duration = motorSpeed > 0 ? (Math.abs(blockData.steps || 0) / motorSpeed).toFixed(2) : '0.00';
+                const effectiveSteps = (blockData.direction === 'backward') ? -(blockData.steps || 0) : (blockData.steps || 0);
+                const duration = motorSpeed > 0 ? (Math.abs(effectiveSteps) / motorSpeed).toFixed(2) : '0.00';
                 const speedLabel = hasCustomSpeed ? 'custom' : 'global';
                 
                 // Update visual display

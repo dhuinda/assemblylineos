@@ -160,6 +160,7 @@
     <script src="{{ url_for('static', filename='js/storageManager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/executionEngine.js') }}"></script>
     <script>
+        const MANUAL_RUN_STEPS = 2000000000; // continuous run until STOP
         const manualControlState = { runningMotors: new Set() };
         let currentProjectId = null;
 
@@ -222,8 +223,9 @@
 
         function runMotor(motorId, direction) {
             if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
-            const steps = direction > 0 ? 10000 : -10000;
-            if (ROSBridge.publishManualMotorCommand(motorId, steps)) {
+            const steps = direction > 0 ? MANUAL_RUN_STEPS : -MANUAL_RUN_STEPS;
+            const speed = typeof MotorSpeedManager !== 'undefined' ? MotorSpeedManager.getSpeed(motorId) : 100;
+            if (ROSBridge.publishManualMotorCommand(motorId, steps, speed)) {
                 manualControlState.runningMotors.add(motorId);
                 updateMotorRunButtons(motorId);
                 updateBothMotorsRunButtons();
@@ -270,9 +272,11 @@
 
         function runBothMotors(direction) {
             if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
-            const steps = direction > 0 ? 10000 : -10000;
-            ROSBridge.publishManualMotorCommand(1, steps);
-            ROSBridge.publishManualMotorCommand(2, steps);
+            const steps = direction > 0 ? MANUAL_RUN_STEPS : -MANUAL_RUN_STEPS;
+            const speed1 = typeof MotorSpeedManager !== 'undefined' ? MotorSpeedManager.getSpeed(1) : 100;
+            const speed2 = typeof MotorSpeedManager !== 'undefined' ? MotorSpeedManager.getSpeed(2) : 100;
+            ROSBridge.publishManualMotorCommand(1, steps, speed1);
+            ROSBridge.publishManualMotorCommand(2, steps, speed2);
             manualControlState.runningMotors.add(1);
             manualControlState.runningMotors.add(2);
             updateMotorRunButtons(1);
