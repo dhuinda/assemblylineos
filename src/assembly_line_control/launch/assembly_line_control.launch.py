@@ -80,6 +80,6 @@ def generate_launch_description():
         rosbridge_node,
         web_interface_node,
         arduino_controller_node,
-        sensor_controller_node,
+        sensor_controller_node, 
     ])
 
