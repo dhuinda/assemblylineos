@@ -218,6 +218,26 @@ const ExecutionEngine = {
     },
     
     /**
+     * Wait until motor reports steps_remaining === 0 (or is_moving === false), then continue.
+     * Uses live status from Arduino so speed changes during the move are accounted for.
+     * @param {number} motorId - Motor ID (1 or 2)
+     * @param {number} timeoutMs - Max wait (ms); use estimated duration * 3 or 5 min
+     * @param {number} pollIntervalMs - How often to check status (default 100)
+     */
+    async waitForMotorComplete(motorId, timeoutMs, pollIntervalMs = 100) {
+        const deadline = performance.now() + timeoutMs;
+        while (this.isExecuting && !this.isPaused && performance.now() < deadline) {
+            const status = typeof ROSBridge !== 'undefined' ? ROSBridge.getMotorStatus(motorId) : null;
+            const stepsRemaining = status && status.steps_remaining != null ? Math.abs(status.steps_remaining) : null;
+            const isMoving = status && status.is_moving != null ? status.is_moving : null;
+            if (stepsRemaining === 0 || (isMoving === false && stepsRemaining === null)) {
+                return;
+            }
+            await this.sleep(pollIntervalMs);
+        }
+    },
+
+    /**
      * Execute a single block
      */
     async executeBlock(blockId) {
@@ -246,10 +266,11 @@ const ExecutionEngine = {
                 
                 const success = ROSBridge.publishMotorCommand(block.motor_id, steps, motorSpeed);
                 if (success) {
-                    const duration = motorSpeed > 0 ? (Math.abs(steps) / motorSpeed) : 0;
-                    UIUtils.log(`  → Motor ${block.motor_id}: ${steps > 0 ? '+' : ''}${steps} steps (${duration.toFixed(2)}s @ ${motorSpeed} sps ${speedLabel})`, 'success');
-                    // Wait for motor to complete - parallel branches will wait concurrently via Promise.all
-                    await this.sleep(duration * 1000);
+                    const estimatedDurationSec = motorSpeed > 0 ? (Math.abs(steps) / motorSpeed) : 0;
+                    UIUtils.log(`  → Motor ${block.motor_id}: ${steps > 0 ? '+' : ''}${steps} steps (est. ${estimatedDurationSec.toFixed(2)}s @ ${motorSpeed} sps ${speedLabel})`, 'success');
+                    // Wait until Arduino reports steps_remaining === 0 so we advance when move actually finishes
+                    const timeoutMs = Math.max(60000, estimatedDurationSec * 3000); // at least 1 min, or 3× estimated
+                    await this.waitForMotorComplete(block.motor_id, timeoutMs);
                 }
             } else if (block.type === 'relay') {
                 const success = ROSBridge.publishRelayCommand(block.relay_id, block.state || 'off');
