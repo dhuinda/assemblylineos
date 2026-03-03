@@ -63,6 +63,10 @@ class ArduinoController(Node):
         self._last_speed_log_time = {1: 0.0, 2: 0.0}
         self._speed_log_interval = 2.0  # Min seconds between logs per motor
         self._speed_log_deadband = 10.0  # Min change (steps/sec) to log
+
+        # Arduino is source of truth for steps_remaining; only estimate when no recent Arduino status
+        self._last_arduino_status_time = {1: 0.0, 2: 0.0}
+        self._arduino_status_timeout = 0.4  # Seconds; after this we fall back to time-based estimate
         
         # Parameters
         self.declare_parameter('serial_port', '')
@@ -396,17 +400,25 @@ class ArduinoController(Node):
                     line = line.strip()
                     if line:
                         consecutive_errors = 0  # Reset on valid data
-                        # Parse analog (potentiometer) messages and publish; don't log to reduce noise
+                        # Parse JSON messages from Arduino; don't log to reduce noise
                         try:
                             data = json.loads(line)
-                            if isinstance(data, dict) and data.get('type') == 'analog':
+                            if not isinstance(data, dict):
+                                raise ValueError('not a dict')
+                            msg_type = data.get('type')
+                            if msg_type == 'analog':
                                 val = data.get('value')
                                 if isinstance(val, (int, float)):
                                     msg = Float32()
                                     msg.data = float(val)
                                     self.potentiometer_raw_pub.publish(msg)
                                     continue
-                        except (json.JSONDecodeError, TypeError):
+                            if msg_type == 'motor_status':
+                                motor_id = data.get('motor_id')
+                                if motor_id in (1, 2):
+                                    self._apply_arduino_motor_status(motor_id, data)
+                                    continue
+                        except (json.JSONDecodeError, TypeError, ValueError):
                             pass
                         # Log all other Arduino responses at info level
                         self.get_logger().info(f'[Arduino] {line}')
@@ -528,30 +540,53 @@ class ArduinoController(Node):
             self._last_speed_log_time[motor_id] = now
             self.get_logger().info(f'Motor {motor_id} speed set to {speed} steps/sec')
     
+    def _apply_arduino_motor_status(self, motor_id: int, data: dict):
+        """Update motor state from Arduino-reported motor_status (source of truth for steps_remaining)."""
+        state = self.motor_states[motor_id]
+        steps_remaining = data.get('steps_remaining')
+        if steps_remaining is not None:
+            try:
+                state['steps_remaining'] = abs(int(steps_remaining))
+            except (TypeError, ValueError):
+                pass
+        speed = data.get('speed')
+        if speed is not None:
+            try:
+                state['speed'] = max(1.0, min(6500.0, float(speed)))
+            except (TypeError, ValueError):
+                pass
+        is_moving = data.get('is_moving')
+        if is_moving is not None:
+            state['is_moving'] = bool(is_moving)
+            if not state['is_moving']:
+                state['steps_remaining'] = 0
+                # Keep steps_total so UI can show "0 remaining / N total"
+        self._last_arduino_status_time[motor_id] = time.time()
+        self.publish_motor_status(motor_id)
+    
     def update_motor_states(self):
-        """Update motor position estimates and publish status"""
+        """Publish motor status; use time-based estimate only when Arduino has not reported recently."""
         current_time = time.time()
         
         for motor_id, state in self.motor_states.items():
+            last_arduino = self._last_arduino_status_time.get(motor_id, 0.0)
+            if current_time - last_arduino <= self._arduino_status_timeout:
+                # Arduino is source of truth; don't overwrite steps_remaining
+                self.publish_motor_status(motor_id)
+                continue
+            # Fallback: estimate from elapsed time when no recent Arduino status
             if state['is_moving'] and state['steps_total'] > 0:
-                # Calculate progress based on elapsed time since start
                 elapsed = current_time - state['start_time']
-                
                 if state['expected_duration'] > 0:
-                    # Calculate remaining steps based on progress through expected duration
                     progress = min(1.0, elapsed / state['expected_duration'])
                     state['steps_remaining'] = max(0, state['steps_total'] * (1.0 - progress))
-                    
-                    # Check if movement is complete
                     if progress >= 1.0:
                         state['steps_remaining'] = 0
                         state['is_moving'] = False
                         state['steps_total'] = 0
                 else:
-                    # No expected duration, mark as complete
                     state['steps_remaining'] = 0
                     state['is_moving'] = False
-            
             self.publish_motor_status(motor_id)
     
     def publish_motor_status(self, motor_id):

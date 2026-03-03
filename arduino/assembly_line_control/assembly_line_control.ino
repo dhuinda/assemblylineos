@@ -40,6 +40,11 @@ int RELAY_PINS[4] = {A0, A1, A2, A3};  // Default: A0-A3 (pins 54-57)
 #define POT_REPORT_INTERVAL_MS 80
 unsigned long lastPotReportTime = 0;
 
+// Motor status: report steps_remaining and speed so host can show accurate time remaining
+#define MOTOR_STATUS_INTERVAL_MS 100   // When any motor is moving
+#define MOTOR_STATUS_IDLE_INTERVAL_MS 500  // When all motors idle
+unsigned long lastMotorStatusTime = 0;
+
 // Relay logic: typical boards are active-LOW (LOW = relay ON, HIGH = relay OFF).
 // If your relays turn ON at power-up, try swapping: set RELAY_OFF_LEVEL to LOW and RELAY_ON_LEVEL to HIGH.
 #define RELAY_OFF_LEVEL HIGH
@@ -160,6 +165,24 @@ void loop() {
     Serial.print("{\"type\":\"analog\",\"pin\":\"pot\",\"value\":");
     Serial.print(val);
     Serial.println("}");
+  }
+
+  // Report motor status (steps_remaining, speed, is_moving) so host has authoritative values
+  bool anyMoving = motors[0].is_moving || motors[1].is_moving;
+  unsigned long statusInterval = anyMoving ? MOTOR_STATUS_INTERVAL_MS : MOTOR_STATUS_IDLE_INTERVAL_MS;
+  if (now - lastMotorStatusTime >= statusInterval) {
+    lastMotorStatusTime = now;
+    for (int i = 0; i < 2; i++) {
+      Serial.print("{\"type\":\"motor_status\",\"motor_id\":");
+      Serial.print(i + 1);
+      Serial.print(",\"steps_remaining\":");
+      Serial.print(motors[i].steps_remaining);
+      Serial.print(",\"speed\":");
+      Serial.print(motor_speeds[i]);
+      Serial.print(",\"is_moving\":");
+      Serial.print(motors[i].is_moving ? "true" : "false");
+      Serial.println("}");
+    }
   }
 }
 
