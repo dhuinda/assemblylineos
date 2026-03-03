@@ -35,7 +35,7 @@ class PotentiometerSpeedNode(Node):
         super().__init__('potentiometer_speed_node')
 
         self.declare_parameter('min_speed', 1.0)
-        self.declare_parameter('max_speed', 6500.0)
+        self.declare_parameter('max_speed', 200.0)
         self.declare_parameter('publish_motor1', False)  # False = don't drive motor at startup; UI subscribes to setpoint and publishes to motor1/speed when user enables it
         self.declare_parameter('publish_motor2', False)
         self.declare_parameter('publish_rate_hz', 15.0)
