@@ -57,6 +57,12 @@ class ArduinoController(Node):
         self._last_published_connected = None  # Track last published state
         self._disconnect_count = 0  # Count consecutive disconnect indicators
         self._disconnect_threshold = 2  # Need this many consecutive failures to mark disconnected
+
+        # Throttle speed-change logging (only log when speed changes meaningfully)
+        self._last_logged_speed = {1: None, 2: None}
+        self._last_speed_log_time = {1: 0.0, 2: 0.0}
+        self._speed_log_interval = 2.0  # Min seconds between logs per motor
+        self._speed_log_deadband = 10.0  # Min change (steps/sec) to log
         
         # Parameters
         self.declare_parameter('serial_port', '')
@@ -514,7 +520,13 @@ class ArduinoController(Node):
         }
         
         self.send_command(command)
-        self.get_logger().info(f'Motor {motor_id} speed set to {speed} steps/sec')
+        now = time.time()
+        last_speed = self._last_logged_speed.get(motor_id)
+        last_time = self._last_speed_log_time.get(motor_id, 0.0)
+        if last_speed is None or abs(speed - last_speed) >= self._speed_log_deadband or (now - last_time) >= self._speed_log_interval:
+            self._last_logged_speed[motor_id] = speed
+            self._last_speed_log_time[motor_id] = now
+            self.get_logger().info(f'Motor {motor_id} speed set to {speed} steps/sec')
     
     def update_motor_states(self):
         """Update motor position estimates and publish status"""
