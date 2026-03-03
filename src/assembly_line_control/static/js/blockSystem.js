@@ -123,6 +123,46 @@ const BlockSystem = {
                 }
                 
                 data.expectedString = expectedStringInput ? (expectedStringInput.value || '') : '';
+            } else if (type === 'motor-speed-from-topic') {
+                const motorIdSelect = blockElement.querySelector('select[data-param="motor_id"]');
+                const topicSelect = blockElement.querySelector('select[data-param="topic"]');
+                const topicInput = blockElement.querySelector('input[data-param="topic"]');
+                data.motor_id = motorIdSelect ? parseInt(motorIdSelect.value) || 1 : 1;
+                if (data.motor_id < 1 || data.motor_id > 2) data.motor_id = 1;
+                if (topicSelect) {
+                    const selectedValue = topicSelect.value;
+                    if (selectedValue === '/topic' && topicInput) {
+                        data.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                    } else {
+                        data.topic = selectedValue || '/motor_speed/setpoint';
+                    }
+                } else if (topicInput) {
+                    data.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                } else {
+                    data.topic = '/motor_speed/setpoint';
+                }
+            } else if (type === 'subscribe-motor-speed-topic') {
+                const motorIdSelect = blockElement.querySelector('select[data-param="motor_id"]');
+                const topicSelect = blockElement.querySelector('select[data-param="topic"]');
+                const topicInput = blockElement.querySelector('input[data-param="topic"]');
+                data.motor_id = motorIdSelect ? parseInt(motorIdSelect.value) || 1 : 1;
+                if (data.motor_id < 1 || data.motor_id > 2) data.motor_id = 1;
+                if (topicSelect) {
+                    const selectedValue = topicSelect.value;
+                    if (selectedValue === '/topic' && topicInput) {
+                        data.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                    } else {
+                        data.topic = selectedValue || '/motor_speed/setpoint';
+                    }
+                } else if (topicInput) {
+                    data.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                } else {
+                    data.topic = '/motor_speed/setpoint';
+                }
+            } else if (type === 'unsubscribe-motor-speed-topic') {
+                const motorIdSelect = blockElement.querySelector('select[data-param="motor_id"]');
+                data.motor_id = motorIdSelect ? parseInt(motorIdSelect.value) || 1 : 1;
+                if (data.motor_id < 1 || data.motor_id > 2) data.motor_id = 1;
             } else if (type === 'trigger' || type === 'pause') {
                 // These types don't need additional data
             } else if (type === 'event') {
@@ -231,6 +271,24 @@ const BlockSystem = {
             if (blockData.expectedString === undefined || blockData.expectedString === null) {
                 errors.push('ROS trigger block missing expected string');
             }
+        } else if (blockData.type === 'motor-speed-from-topic') {
+            if (!blockData.motor_id || blockData.motor_id < 1 || blockData.motor_id > 2) {
+                errors.push('Set speed from topic: invalid motor ID (use 1 or 2)');
+            }
+            if (!blockData.topic || blockData.topic.trim() === '') {
+                errors.push('Set speed from topic: missing topic name');
+            }
+        } else if (blockData.type === 'subscribe-motor-speed-topic') {
+            if (!blockData.motor_id || blockData.motor_id < 1 || blockData.motor_id > 2) {
+                errors.push('Subscribe motor speed: invalid motor ID (use 1 or 2)');
+            }
+            if (!blockData.topic || blockData.topic.trim() === '') {
+                errors.push('Subscribe motor speed: missing topic name');
+            }
+        } else if (blockData.type === 'unsubscribe-motor-speed-topic') {
+            if (!blockData.motor_id || blockData.motor_id < 1 || blockData.motor_id > 2) {
+                errors.push('Unsubscribe motor speed: invalid motor ID (use 1 or 2)');
+            }
         }
         
         return {
@@ -283,6 +341,14 @@ const BlockSystem = {
         } else if (templateData.type === 'ros-trigger') {
             block.topic = templateData.topic || '/rosout';
             block.expectedString = templateData.expectedString || '';
+        } else if (templateData.type === 'motor-speed-from-topic') {
+            block.motor_id = (templateData.motor_id === 1 || templateData.motor_id === 2) ? templateData.motor_id : 1;
+            block.topic = (templateData.topic && String(templateData.topic).trim()) ? templateData.topic.trim() : '/motor_speed/setpoint';
+        } else if (templateData.type === 'subscribe-motor-speed-topic') {
+            block.motor_id = (templateData.motor_id === 1 || templateData.motor_id === 2) ? templateData.motor_id : 1;
+            block.topic = (templateData.topic && String(templateData.topic).trim()) ? templateData.topic.trim() : '/motor_speed/setpoint';
+        } else if (templateData.type === 'unsubscribe-motor-speed-topic') {
+            block.motor_id = (templateData.motor_id === 1 || templateData.motor_id === 2) ? templateData.motor_id : 1;
         } else if (templateData.type === 'repeat') {
             block.count = templateData.count || 10;
         } else if (templateData.type === 'wait-sensor') {
@@ -352,6 +418,10 @@ const BlockSystem = {
             baseHeight = 120; // 6 grid units -> will become 7 (odd) = 140px
         } else if (blockData.type === 'motor') {
             baseHeight = 160; // 8 grid units = 160px (has direction + steps + speed inputs + duration display + padding)
+        } else if (blockData.type === 'motor-speed-from-topic' || blockData.type === 'subscribe-motor-speed-topic') {
+            baseHeight = 200; // header + motor dropdown + topic dropdown + custom input (same as ros-trigger)
+        } else if (blockData.type === 'unsubscribe-motor-speed-topic') {
+            baseHeight = 120; // header + motor dropdown
         } else if (blockData.type === 'relay' || blockData.type === 'delay' || blockData.type === 'repeat') {
             baseHeight = 100; // 5 grid units (already odd) = 100px
         } else if (blockData.type === 'event') {
@@ -448,6 +518,48 @@ const BlockSystem = {
                 if (expectedStringInput) {
                     blockData.expectedString = expectedStringInput.value || '';
                 }
+            } else if (blockData.type === 'motor-speed-from-topic') {
+                const motorIdSelect = blockEl.querySelector('select[data-param="motor_id"]');
+                const topicSelect = blockEl.querySelector('select[data-param="topic"]');
+                const topicInput = blockEl.querySelector('input[data-param="topic"]');
+                if (motorIdSelect) {
+                    blockData.motor_id = parseInt(motorIdSelect.value) || 1;
+                    if (blockData.motor_id < 1 || blockData.motor_id > 2) blockData.motor_id = 1;
+                }
+                if (topicSelect) {
+                    const selectedValue = topicSelect.value;
+                    if (selectedValue === '/topic' && topicInput) {
+                        blockData.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                    } else {
+                        blockData.topic = selectedValue || '/motor_speed/setpoint';
+                    }
+                } else if (topicInput) {
+                    blockData.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                }
+            } else if (blockData.type === 'subscribe-motor-speed-topic') {
+                const motorIdSelect = blockEl.querySelector('select[data-param="motor_id"]');
+                const topicSelect = blockEl.querySelector('select[data-param="topic"]');
+                const topicInput = blockEl.querySelector('input[data-param="topic"]');
+                if (motorIdSelect) {
+                    blockData.motor_id = parseInt(motorIdSelect.value) || 1;
+                    if (blockData.motor_id < 1 || blockData.motor_id > 2) blockData.motor_id = 1;
+                }
+                if (topicSelect) {
+                    const selectedValue = topicSelect.value;
+                    if (selectedValue === '/topic' && topicInput) {
+                        blockData.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                    } else {
+                        blockData.topic = selectedValue || '/motor_speed/setpoint';
+                    }
+                } else if (topicInput) {
+                    blockData.topic = (topicInput.value || '').trim() || '/motor_speed/setpoint';
+                }
+            } else if (blockData.type === 'unsubscribe-motor-speed-topic') {
+                const motorIdSelect = blockEl.querySelector('select[data-param="motor_id"]');
+                if (motorIdSelect) {
+                    blockData.motor_id = parseInt(motorIdSelect.value) || 1;
+                    if (blockData.motor_id < 1 || blockData.motor_id > 2) blockData.motor_id = 1;
+                }
             }
             // Note: trigger and pause blocks have no parameters
             
@@ -475,6 +587,9 @@ const BlockSystem = {
     getBlockTypeClass(type) {
         const classMap = {
             'motor': 'block-motor',
+            'motor-speed-from-topic': 'block-motor',
+            'subscribe-motor-speed-topic': 'block-motor',
+            'unsubscribe-motor-speed-topic': 'block-motor',
             'relay': 'block-relay',
             'trigger': 'block-trigger',
             'ros-trigger': 'block-trigger',

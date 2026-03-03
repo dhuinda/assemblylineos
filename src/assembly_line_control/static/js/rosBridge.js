@@ -27,6 +27,8 @@ const ROSBridge = {
     /** Shared execution state across all clients: { running, projectId, clientId } */
     executionSyncState: { running: false, projectId: null, clientId: null },
     dynamicSubscriptions: new Map(), // For subscribing to topics on the fly
+    /** motorId (1|2) -> { topicName, topic, handler } for continuous motor speed from topic */
+    motorSpeedTopicSubscriptions: new Map(),
     messageThrottle: new Map(), // Slow down updates that come too fast
     connectionQuality: { latency: 0, messageRate: 0, lastMessageTime: null }, // How's the connection doing?
     parseCache: new Map(), // Cache parsed JSON so we don't parse the same thing twice
@@ -479,6 +481,35 @@ const ROSBridge = {
     },
 
     /**
+     * Publish motor speed only (no steps). Use this to change speed while a motor is moving
+     * so that steps_remaining is preserved. Does not publish to /motorN/command.
+     * @param {number} motorId - Motor ID (1 or 2)
+     * @param {number} speed - Speed in steps per second
+     * @returns {boolean} - Success status
+     */
+    publishMotorSpeedOnly(motorId, speed) {
+        if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+            SimulationEngine.setMotorSpeed(motorId, speed);
+            return true;
+        }
+        if (!this.isConnected) return false;
+        let speedPub = null;
+        if (motorId === 1) speedPub = this.motor1SpeedPub;
+        else if (motorId === 2) speedPub = this.motor2SpeedPub;
+        if (!speedPub) return false;
+        try {
+            const speedVal = parseFloat(speed);
+            const speedMsg = new ROSLIB.Message({ data: speedVal });
+            speedPub.publish(speedMsg);
+            // Update local status so Live display updates immediately
+            this.motorStatus[motorId] = { ...(this.motorStatus[motorId] || {}), speed: speedVal };
+            return true;
+        } catch (error) {
+            return false;
+        }
+    },
+
+    /**
      * Publish a manual motor command: stop the motor first, then send steps.
      * This ignores any previous steps_remaining so the motor runs exactly the requested steps.
      * Use this for all manual (UI) motor controls.
@@ -658,6 +689,91 @@ const ROSBridge = {
         } else {
             return JSON.stringify(msg);
         }
+    },
+    
+    /**
+     * Subscribe to a Float32 topic and continuously update motor speed (for "subscribe to motor speed topic" block).
+     * Only one topic per motor; subscribing again for the same motor replaces the previous subscription.
+     * @param {number} motorId - Motor ID (1 or 2)
+     * @param {string} topicName - ROS topic name (std_msgs/Float32)
+     * @returns {boolean} - Success
+     */
+    subscribeToMotorSpeedTopic(motorId, topicName) {
+        if (motorId !== 1 && motorId !== 2) return false;
+        const minSpeed = (typeof Config !== 'undefined' && Config.MIN_MOTOR_SPEED) ? Config.MIN_MOTOR_SPEED : 1;
+        const maxSpeed = (typeof Config !== 'undefined' && Config.MAX_MOTOR_SPEED) ? Config.MAX_MOTOR_SPEED : 6500;
+        this.unsubscribeFromMotorSpeedTopic(motorId);
+        if (typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive) {
+            this.motorSpeedTopicSubscriptions.set(motorId, { topicName, topic: null, handler: null, simulation: true });
+            if (typeof UIUtils !== 'undefined') UIUtils.log(`[ROS] Motor ${motorId} speed following topic ${topicName} (simulation)`, 'success');
+            return true;
+        }
+        if (!this.ros || !this.isConnected) return false;
+        topicName = (topicName || '').trim() || '/motor_speed/setpoint';
+        const topic = new ROSLIB.Topic({
+            ros: this.ros,
+            name: topicName,
+            messageType: 'std_msgs/Float32'
+        });
+        const handler = (msg) => {
+            const raw = (msg && msg.data !== undefined) ? parseFloat(msg.data) : NaN;
+            const speed = Math.max(minSpeed, Math.min(maxSpeed, isNaN(raw) ? minSpeed : Math.round(raw)));
+            if (typeof MotorSpeedManager !== 'undefined') MotorSpeedManager.setSpeed(motorId, speed);
+            this.publishMotorSpeedOnly(motorId, speed);
+            // Update local status so Live display updates immediately without waiting for /motorN/status
+            this.motorStatus[motorId] = { ...(this.motorStatus[motorId] || {}), speed };
+        };
+        topic.subscribe(handler);
+        this.motorSpeedTopicSubscriptions.set(motorId, { topicName, topic, handler });
+        if (typeof UIUtils !== 'undefined') UIUtils.log(`[ROS] Motor ${motorId} speed following topic ${topicName}`, 'success');
+        return true;
+    },
+
+    /**
+     * Unsubscribe from continuous motor speed updates for a motor.
+     * @param {number} motorId - Motor ID (1 or 2)
+     * @returns {boolean} - Success
+     */
+    unsubscribeFromMotorSpeedTopic(motorId) {
+        if (motorId !== 1 && motorId !== 2) return false;
+        const sub = this.motorSpeedTopicSubscriptions.get(motorId);
+        if (!sub) return true;
+        this.motorSpeedTopicSubscriptions.delete(motorId);
+        if (sub.topic) {
+            try { sub.topic.unsubscribe(); } catch (e) {}
+        }
+        if (typeof UIUtils !== 'undefined') UIUtils.log(`[ROS] Motor ${motorId} no longer following speed topic`, 'success');
+        return true;
+    },
+
+    /**
+     * Wait for one Float32 message from a topic (e.g. motor speed setpoint).
+     * @param {string} topicName - ROS topic name (std_msgs/Float32)
+     * @param {number} timeoutMs - Timeout in ms (default 5000)
+     * @returns {Promise<number>} - Resolves with msg.data, rejects on timeout or disconnect
+     */
+    waitForTopicFloat32(topicName, timeoutMs = 5000) {
+        return new Promise((resolve, reject) => {
+            if (!this.ros || !this.isConnected) {
+                reject(new Error('Not connected to ROS Bridge'));
+                return;
+            }
+            const topic = new ROSLIB.Topic({
+                ros: this.ros,
+                name: topicName,
+                messageType: 'std_msgs/Float32'
+            });
+            const timeout = setTimeout(() => {
+                try { topic.unsubscribe(); } catch (e) {}
+                reject(new Error(`Timeout waiting for Float32 on ${topicName}`));
+            }, timeoutMs);
+            topic.subscribe((msg) => {
+                clearTimeout(timeout);
+                try { topic.unsubscribe(); } catch (e) {}
+                const value = (msg && msg.data !== undefined) ? parseFloat(msg.data) : NaN;
+                resolve(value);
+            });
+        });
     },
     
     /**
@@ -913,6 +1029,10 @@ const ROSBridge = {
             subscription.topic.unsubscribe();
         });
         this.dynamicSubscriptions.clear();
+        this.motorSpeedTopicSubscriptions.forEach((sub) => {
+            if (sub.topic) try { sub.topic.unsubscribe(); } catch (e) {}
+        });
+        this.motorSpeedTopicSubscriptions.clear();
         this.messageThrottle.clear();
         this.parseCache.clear();
     },

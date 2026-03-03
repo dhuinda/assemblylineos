@@ -28,6 +28,8 @@ setup(
             'web_interface = assembly_line_control.web_interface:main',
             'arduino_controller = assembly_line_control.arduino_controller:main',
             'sensor_controller = assembly_line_control.sensor_controller:main',
+            'potentiometer_speed_node = assembly_line_control.potentiometer_speed_node:main',
+            'test_motor_speed_publisher = assembly_line_control.test_motor_speed_publisher:main',
         ],
     },
 )

@@ -31,6 +31,16 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
   RENAME sensor_controller
 )
+install(PROGRAMS
+  ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/potentiometer_speed_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME potentiometer_speed_node
+)
+install(PROGRAMS
+  ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/test_motor_speed_publisher.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME test_motor_speed_publisher
+)
 
 # Install templates, static files, and launch files
 install(DIRECTORY templates static launch

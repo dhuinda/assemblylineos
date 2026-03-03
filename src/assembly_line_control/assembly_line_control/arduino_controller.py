@@ -73,6 +73,7 @@ class ArduinoController(Node):
         self.relay3_status_pub = self.create_publisher(String, 'relay3/status', 10)
         self.relay4_status_pub = self.create_publisher(String, 'relay4/status', 10)
         self.connection_status_pub = self.create_publisher(String, 'arduino/status', 10)
+        self.potentiometer_raw_pub = self.create_publisher(Float32, 'potentiometer/raw', 10)
         
         # Initialize serial connection (after publishers are created)
         self.init_serial_connection()
@@ -388,9 +389,21 @@ class ArduinoController(Node):
                     line, buffer = buffer.split('\n', 1)
                     line = line.strip()
                     if line:
-                        # Log Arduino responses at info level so they're visible
-                        self.get_logger().info(f'[Arduino] {line}')
                         consecutive_errors = 0  # Reset on valid data
+                        # Parse analog (potentiometer) messages and publish; don't log to reduce noise
+                        try:
+                            data = json.loads(line)
+                            if isinstance(data, dict) and data.get('type') == 'analog':
+                                val = data.get('value')
+                                if isinstance(val, (int, float)):
+                                    msg = Float32()
+                                    msg.data = float(val)
+                                    self.potentiometer_raw_pub.publish(msg)
+                                    continue
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        # Log all other Arduino responses at info level
+                        self.get_logger().info(f'[Arduino] {line}')
                 
                 time.sleep(0.01)
             except serial.SerialException as e:

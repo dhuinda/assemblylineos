@@ -22,7 +22,7 @@ const BlockRenderer = {
         block.dataset.blockId = blockData.id;
         
         // Add motor_id or relay_id to dataset for querying
-        if (blockData.type === 'motor' && blockData.motor_id) {
+        if ((blockData.type === 'motor' || blockData.type === 'motor-speed-from-topic' || blockData.type === 'subscribe-motor-speed-topic' || blockData.type === 'unsubscribe-motor-speed-topic') && blockData.motor_id) {
             block.dataset.motorId = blockData.motor_id;
         } else if (blockData.type === 'relay' && blockData.relay_id) {
             block.dataset.relayId = blockData.relay_id;
@@ -433,6 +433,96 @@ const BlockRenderer = {
                                onclick="event.stopPropagation()"
                                style="max-width: 100%;">
                         <div class="text-xs text-gray-500 italic">Matches if text appears in message</div>
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'motor-speed-from-topic') {
+            const motorId = blockData.motor_id === 1 || blockData.motor_id === 2 ? blockData.motor_id : 1;
+            const topic = blockData.topic || '/motor_speed/setpoint';
+            const isCustomTopic = !['/motor_speed/setpoint', '/motor1/speed', '/motor2/speed'].includes(topic);
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-motor text-xs">SET MOTOR SPEED FROM TOPIC</div>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Motor:</label>
+                        <select class="w-full px-1 py-0.5 text-xs text-white accent-motor" data-param="motor_id"
+                                onclick="event.stopPropagation()" style="max-width: 100%;">
+                            <option value="1" ${motorId === 1 ? 'selected' : ''}>Motor 1</option>
+                            <option value="2" ${motorId === 2 ? 'selected' : ''}>Motor 2</option>
+                        </select>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Topic:</label>
+                        <select class="w-full px-1 py-0.5 text-xs text-white accent-motor" data-param="topic"
+                                onclick="event.stopPropagation()"
+                                onchange="this.nextElementSibling.style.display = this.value === '/topic' ? 'block' : 'none'; this.nextElementSibling.value = this.value === '/topic' ? '' : this.value;"
+                                style="max-width: 100%;">
+                            <option value="/motor_speed/setpoint" ${topic === '/motor_speed/setpoint' ? 'selected' : ''}>/motor_speed/setpoint</option>
+                            <option value="/motor1/speed" ${topic === '/motor1/speed' ? 'selected' : ''}>/motor1/speed</option>
+                            <option value="/motor2/speed" ${topic === '/motor2/speed' ? 'selected' : ''}>/motor2/speed</option>
+                            <option value="/topic" ${isCustomTopic ? 'selected' : ''}>Custom...</option>
+                        </select>
+                        <input type="text" class="w-full px-1 py-0.5 text-xs text-white accent-motor"
+                               placeholder="/custom/topic" data-param="topic" value="${isCustomTopic ? topic : ''}"
+                               onclick="event.stopPropagation()"
+                               style="max-width: 100%; display: ${isCustomTopic ? 'block' : 'none'};">
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'subscribe-motor-speed-topic') {
+            const motorId = blockData.motor_id === 1 || blockData.motor_id === 2 ? blockData.motor_id : 1;
+            const topic = blockData.topic || '/motor_speed/setpoint';
+            const isCustomTopic = !['/motor_speed/setpoint', '/motor1/speed', '/motor2/speed'].includes(topic);
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-motor text-xs">SUBSCRIBE TO MOTOR SPEED TOPIC</div>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Motor:</label>
+                        <select class="w-full px-1 py-0.5 text-xs text-white accent-motor" data-param="motor_id"
+                                onclick="event.stopPropagation()" style="max-width: 100%;">
+                            <option value="1" ${motorId === 1 ? 'selected' : ''}>Motor 1</option>
+                            <option value="2" ${motorId === 2 ? 'selected' : ''}>Motor 2</option>
+                        </select>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Topic:</label>
+                        <select class="w-full px-1 py-0.5 text-xs text-white accent-motor" data-param="topic"
+                                onclick="event.stopPropagation()"
+                                onchange="this.nextElementSibling.style.display = this.value === '/topic' ? 'block' : 'none'; this.nextElementSibling.value = this.value === '/topic' ? '' : this.value;"
+                                style="max-width: 100%;">
+                            <option value="/motor_speed/setpoint" ${topic === '/motor_speed/setpoint' ? 'selected' : ''}>/motor_speed/setpoint</option>
+                            <option value="/motor1/speed" ${topic === '/motor1/speed' ? 'selected' : ''}>/motor1/speed</option>
+                            <option value="/motor2/speed" ${topic === '/motor2/speed' ? 'selected' : ''}>/motor2/speed</option>
+                            <option value="/topic" ${isCustomTopic ? 'selected' : ''}>Custom...</option>
+                        </select>
+                        <input type="text" class="w-full px-1 py-0.5 text-xs text-white accent-motor"
+                               placeholder="/custom/topic" data-param="topic" value="${isCustomTopic ? topic : ''}"
+                               onclick="event.stopPropagation()"
+                               style="max-width: 100%; display: ${isCustomTopic ? 'block' : 'none'};">
+                    </div>
+                </div>
+            `;
+        } else if (blockData.type === 'unsubscribe-motor-speed-topic') {
+            const motorId = blockData.motor_id === 1 || blockData.motor_id === 2 ? blockData.motor_id : 1;
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-motor text-xs">UNSUBSCRIBE FROM MOTOR SPEED TOPIC</div>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <label class="text-xs text-gray-400">Motor:</label>
+                        <select class="w-full px-1 py-0.5 text-xs text-white accent-motor" data-param="motor_id"
+                                onclick="event.stopPropagation()" style="max-width: 100%;">
+                            <option value="1" ${motorId === 1 ? 'selected' : ''}>Motor 1</option>
+                            <option value="2" ${motorId === 2 ? 'selected' : ''}>Motor 2</option>
+                        </select>
                     </div>
                 </div>
             `;

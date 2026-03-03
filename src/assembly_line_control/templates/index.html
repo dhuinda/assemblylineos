@@ -177,6 +177,70 @@
                                                        placeholder="steps" data-param="steps" value="0">
                                             </div>
                                         </div>
+                                        <div class="block block-motor card p-2" data-type="motor-speed-from-topic" draggable="true">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="accent-motor font-medium text-xs">SET MOTOR SPEED FROM TOPIC</span>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Motor:</label>
+                                                    <select class="w-full px-2 py-1 text-xs text-white accent-motor" data-param="motor_id">
+                                                        <option value="1">Motor 1</option>
+                                                        <option value="2">Motor 2</option>
+                                                    </select>
+                                                </div>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Topic:</label>
+                                                    <select class="w-full px-2 py-1 text-xs text-white accent-motor" data-param="topic"
+                                                            onchange="handleSpeedFromTopicTopicChange(this)">
+                                                        <option value="/motor_speed/setpoint">/motor_speed/setpoint</option>
+                                                        <option value="/motor1/speed">/motor1/speed</option>
+                                                        <option value="/motor2/speed">/motor2/speed</option>
+                                                        <option value="/topic">Custom topic...</option>
+                                                    </select>
+                                                    <input type="text" class="w-full px-2 py-1 text-xs text-white accent-motor mt-0.5"
+                                                           placeholder="/custom/topic" data-param="topic"
+                                                           style="display: none;"
+                                                           onclick="event.stopPropagation()">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="block block-motor card p-2" data-type="subscribe-motor-speed-topic" draggable="true">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="accent-motor font-medium text-xs">SUBSCRIBE TO MOTOR SPEED TOPIC</span>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Motor:</label>
+                                                    <select class="w-full px-2 py-1 text-xs text-white accent-motor" data-param="motor_id">
+                                                        <option value="1">Motor 1</option>
+                                                        <option value="2">Motor 2</option>
+                                                    </select>
+                                                </div>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Topic:</label>
+                                                    <select class="w-full px-2 py-1 text-xs text-white accent-motor" data-param="topic"
+                                                            onchange="handleSubscribeSpeedTopicChange(this)">
+                                                        <option value="/motor_speed/setpoint">/motor_speed/setpoint</option>
+                                                        <option value="/motor1/speed">/motor1/speed</option>
+                                                        <option value="/motor2/speed">/motor2/speed</option>
+                                                        <option value="/topic">Custom topic...</option>
+                                                    </select>
+                                                    <input type="text" class="w-full px-2 py-1 text-xs text-white accent-motor mt-0.5"
+                                                           placeholder="/custom/topic" data-param="topic"
+                                                           style="display: none;"
+                                                           onclick="event.stopPropagation()">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="block block-motor card p-2" data-type="unsubscribe-motor-speed-topic" draggable="true">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="accent-motor font-medium text-xs">UNSUBSCRIBE FROM MOTOR SPEED TOPIC</span>
+                                                <div class="flex flex-col gap-0.5">
+                                                    <label class="text-xs text-gray-400">Motor:</label>
+                                                    <select class="w-full px-2 py-1 text-xs text-white accent-motor" data-param="motor_id">
+                                                        <option value="1">Motor 1</option>
+                                                        <option value="2">Motor 2</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                                 
@@ -387,27 +451,33 @@
                         <!-- Motor Speed Panel -->
                         <div id="sidebarPanel-speed" class="sidebar-panel hidden">
                             <div class="space-y-3">
-                                <div class="flex items-center justify-between">
-                                    <span class="text-xs text-gray-400">MOTOR 1</span>
-                                    <div class="flex items-center gap-2">
-                                        <input type="range" id="motor1Speed" min="1" max="6500" value="100" 
-                                               class="w-24 accent-motor" 
-                                               oninput="updateMotorSpeed(1, this.value)">
-                                        <input type="number" id="motor1SpeedValue" min="1" max="6500" value="100"
-                                               class="text-xs accent-motor w-16 text-right bg-transparent border border-gray-600 rounded px-1"
-                                               onchange="updateMotorSpeed(1, this.value)">
+                                <div class="flex flex-col gap-0.5">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-xs text-gray-400">MOTOR 1</span>
+                                        <div class="flex items-center gap-2">
+                                            <input type="range" id="motor1Speed" min="1" max="6500" value="100" 
+                                                   class="w-24 accent-motor" 
+                                                   oninput="updateMotorSpeed(1, this.value)">
+                                            <input type="number" id="motor1SpeedValue" min="1" max="6500" value="100"
+                                                   class="text-xs accent-motor w-16 text-right bg-transparent border border-gray-600 rounded px-1"
+                                                   onchange="updateMotorSpeed(1, this.value)">
+                                        </div>
                                     </div>
+                                    <div id="motor1LiveSpeed" class="text-xs text-gray-500">Live: -- sps</div>
                                 </div>
-                                <div class="flex items-center justify-between">
-                                    <span class="text-xs text-gray-400">MOTOR 2</span>
-                                    <div class="flex items-center gap-2">
-                                        <input type="range" id="motor2Speed" min="1" max="6500" value="100" 
-                                               class="w-24 accent-motor" 
-                                               oninput="updateMotorSpeed(2, this.value)">
-                                        <input type="number" id="motor2SpeedValue" min="1" max="6500" value="100"
-                                               class="text-xs accent-motor w-16 text-right bg-transparent border border-gray-600 rounded px-1"
-                                               onchange="updateMotorSpeed(2, this.value)">
+                                <div class="flex flex-col gap-0.5">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-xs text-gray-400">MOTOR 2</span>
+                                        <div class="flex items-center gap-2">
+                                            <input type="range" id="motor2Speed" min="1" max="6500" value="100" 
+                                                   class="w-24 accent-motor" 
+                                                   oninput="updateMotorSpeed(2, this.value)">
+                                            <input type="number" id="motor2SpeedValue" min="1" max="6500" value="100"
+                                                   class="text-xs accent-motor w-16 text-right bg-transparent border border-gray-600 rounded px-1"
+                                                   onchange="updateMotorSpeed(2, this.value)">
+                                        </div>
                                     </div>
+                                    <div id="motor2LiveSpeed" class="text-xs text-gray-500">Live: -- sps</div>
                                 </div>
                             </div>
                             <div class="mt-3 text-xs text-gray-500">
@@ -1331,7 +1401,29 @@
                 customInput.value = selectElement.value;
             }
         }
-        
+
+        function handleSpeedFromTopicTopicChange(selectElement) {
+            const customInput = selectElement.parentElement.querySelector('input[data-param="topic"]');
+            if (selectElement.value === '/topic') {
+                customInput.style.display = 'block';
+                customInput.value = '';
+            } else {
+                customInput.style.display = 'none';
+                customInput.value = selectElement.value;
+            }
+        }
+
+        function handleSubscribeSpeedTopicChange(selectElement) {
+            const customInput = selectElement.parentElement.querySelector('input[data-param="topic"]');
+            if (selectElement.value === '/topic') {
+                customInput.style.display = 'block';
+                customInput.value = '';
+            } else {
+                customInput.style.display = 'none';
+                customInput.value = selectElement.value;
+            }
+        }
+
         // Toggle auto-wire mode
         function toggleAutoWire() {
             const toggle = document.getElementById('autoWireToggle');

@@ -35,6 +35,11 @@ int MOTOR_PINS[2][2] = {
 // Relay pin definitions - can be reconfigured via serial
 int RELAY_PINS[4] = {A0, A1, A2, A3};  // Default: A0-A3 (pins 54-57)
 
+// Potentiometer for variable motor speed (analog 0-1023, reported over serial)
+#define POT_PIN A6
+#define POT_REPORT_INTERVAL_MS 80
+unsigned long lastPotReportTime = 0;
+
 // Relay logic: typical boards are active-LOW (LOW = relay ON, HIGH = relay OFF).
 // If your relays turn ON at power-up, try swapping: set RELAY_OFF_LEVEL to LOW and RELAY_ON_LEVEL to HIGH.
 #define RELAY_OFF_LEVEL HIGH
@@ -117,6 +122,9 @@ void setup() {
     relay_states[i] = false;
   }
   
+  // Potentiometer for variable motor speed (optional)
+  pinMode(POT_PIN, INPUT);
+  
   // Initialize custom pins array
   for (int i = 0; i < MAX_CUSTOM_PINS; i++) {
     customPins[i].name[0] = '\0';
@@ -143,6 +151,16 @@ void loop() {
   
   // Update all motors (non-blocking)
   updateMotors();
+  
+  // Report potentiometer value periodically for variable motor speed
+  unsigned long now = millis();
+  if (now - lastPotReportTime >= POT_REPORT_INTERVAL_MS) {
+    lastPotReportTime = now;
+    int val = analogRead(POT_PIN);
+    Serial.print("{\"type\":\"analog\",\"pin\":\"pot\",\"value\":");
+    Serial.print(val);
+    Serial.println("}");
+  }
 }
 
 void readSerialCommands() {
@@ -450,8 +468,9 @@ void processMotorCommand(String command) {
     Serial.print(motor_id);
     Serial.println(" stopped (explicit)");
   } else if (steps == 0) {
-    // steps=0 without explicit stop = speed-only update
-    // Don't stop the motor, just update speed (already done above)
+    // steps=0 without explicit stop = speed-only (live) update
+    // Only motor_speeds[] and step_interval were updated above; steps_remaining and is_moving
+    // are unchanged. Safe for continuous updates (e.g. potentiometer); next step uses new interval.
     Serial.print("SPEED UPDATE: Motor ");
     Serial.print(motor_id);
     Serial.print(" speed=");

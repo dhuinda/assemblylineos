@@ -12,6 +12,27 @@ const App = {
         // Connect to ROS
         ROSBridge.init();
         
+        // Update live motor speed display from ROS status (e.g. from potentiometer/topic)
+        setInterval(() => {
+            const el1 = document.getElementById('motor1LiveSpeed');
+            const el2 = document.getElementById('motor2LiveSpeed');
+            const speedNum = (st) => {
+                if (!st || st.speed == null) return NaN;
+                const v = typeof st.speed === 'number' ? st.speed : parseFloat(st.speed);
+                return isNaN(v) ? NaN : v;
+            };
+            if (el1) {
+                const st = typeof ROSBridge !== 'undefined' ? ROSBridge.getMotorStatus(1) : null;
+                const v = speedNum(st);
+                el1.textContent = !isNaN(v) ? `Live: ${Math.round(v)} sps` : 'Live: -- sps';
+            }
+            if (el2) {
+                const st = typeof ROSBridge !== 'undefined' ? ROSBridge.getMotorStatus(2) : null;
+                const v = speedNum(st);
+                el2.textContent = !isNaN(v) ? `Live: ${Math.round(v)} sps` : 'Live: -- sps';
+            }
+        }, 300);
+        
         // Set up the workflow system
         WorkflowManager.init();
         

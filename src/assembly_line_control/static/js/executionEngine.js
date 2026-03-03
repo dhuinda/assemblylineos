@@ -260,6 +260,35 @@ const ExecutionEngine = {
                 const duration = block.duration || 1.0;
                 UIUtils.log(`  → Delay: ${duration.toFixed(2)}s`, 'success');
                 await this.sleep(duration * 1000);
+            } else if (block.type === 'motor-speed-from-topic') {
+                const topic = (block.topic || '').trim() || '/motor_speed/setpoint';
+                const motorId = block.motor_id === 1 || block.motor_id === 2 ? block.motor_id : 1;
+                if (!topic) {
+                    UIUtils.log(`[ERROR] Set speed from topic block ${blockId}: missing topic`, 'error');
+                    return;
+                }
+                UIUtils.log(`  → Block ${blockId}: Set motor ${motorId} speed from topic ${topic}`, 'success');
+                try {
+                    const rawSpeed = await ROSBridge.waitForTopicFloat32(topic, 5000);
+                    const minSpeed = Config.MIN_MOTOR_SPEED || 1;
+                    const maxSpeed = Config.MAX_MOTOR_SPEED || 6500;
+                    const speed = Math.max(minSpeed, Math.min(maxSpeed, isNaN(rawSpeed) ? minSpeed : Math.round(rawSpeed)));
+                    MotorSpeedManager.setSpeed(motorId, speed);
+                    // Publish speed only so steps_remaining is preserved (e.g. motor block already running)
+                    ROSBridge.publishMotorSpeedOnly(motorId, speed);
+                    UIUtils.log(`  → Motor ${motorId} speed set to ${speed} sps (from topic)`, 'success');
+                } catch (err) {
+                    UIUtils.log(`[ERROR] Set speed from topic block ${blockId}: ${err.message}`, 'error');
+                }
+            } else if (block.type === 'subscribe-motor-speed-topic') {
+                const topic = (block.topic || '').trim() || '/motor_speed/setpoint';
+                const motorId = block.motor_id === 1 || block.motor_id === 2 ? block.motor_id : 1;
+                ROSBridge.subscribeToMotorSpeedTopic(motorId, topic);
+                UIUtils.log(`  → Motor ${motorId} now following speed topic ${topic}`, 'success');
+            } else if (block.type === 'unsubscribe-motor-speed-topic') {
+                const motorId = block.motor_id === 1 || block.motor_id === 2 ? block.motor_id : 1;
+                ROSBridge.unsubscribeFromMotorSpeedTopic(motorId);
+                UIUtils.log(`  → Motor ${motorId} stopped following speed topic`, 'success');
             } else if (block.type === 'pause') {
                 // Pause everything and stop all motors
                 // Only do this if we're not already paused (so multiple pause blocks don't interfere)
@@ -757,6 +786,43 @@ const ExecutionEngine = {
                     <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                     <div class="text-xs text-yellow-400 mt-1">Waiting for message...</div>
                 `;
+            } else if (block.type === 'motor-speed-from-topic') {
+                estimatedDuration = 5; // Max wait for one message (timeout 5s)
+                timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
+                const topic = block.topic || '/motor_speed/setpoint';
+                const motorId = block.motor_id || 1;
+                content = `
+                    <div class="flex items-center justify-between text-xs mb-1">
+                        <span class="accent-motor font-semibold">SET SPEED FROM TOPIC</span>
+                        <span class="text-gray-400 font-mono">#${blockId}</span>
+                    </div>
+                    <div class="text-xs text-gray-400 mb-1">Motor ${motorId} ← ${topic}</div>
+                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-yellow-400 mt-1">Waiting for Float32...</div>
+                `;
+            } else if (block.type === 'subscribe-motor-speed-topic') {
+                estimatedDuration = 0;
+                timeRemaining = 0;
+                const topic = block.topic || '/motor_speed/setpoint';
+                const motorId = block.motor_id || 1;
+                content = `
+                    <div class="flex items-center justify-between text-xs mb-1">
+                        <span class="accent-motor font-semibold">SUBSCRIBE MOTOR SPEED</span>
+                        <span class="text-gray-400 font-mono">#${blockId}</span>
+                    </div>
+                    <div class="text-xs text-gray-400 mb-1">Motor ${motorId} ← ${topic}</div>
+                `;
+            } else if (block.type === 'unsubscribe-motor-speed-topic') {
+                estimatedDuration = 0;
+                timeRemaining = 0;
+                const motorId = block.motor_id || 1;
+                content = `
+                    <div class="flex items-center justify-between text-xs mb-1">
+                        <span class="accent-motor font-semibold">UNSUBSCRIBE MOTOR SPEED</span>
+                        <span class="text-gray-400 font-mono">#${blockId}</span>
+                    </div>
+                    <div class="text-xs text-gray-400 mb-1">Motor ${motorId}</div>
+                `;
             } else if (block.type === 'event') {
                 estimatedDuration = 0; // Events are instant
                 timeRemaining = 0;
@@ -829,6 +895,12 @@ const ExecutionEngine = {
                 content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-pause font-semibold">PAUSE</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
             } else if (block.type === 'event') {
                 content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-trigger font-semibold">EVENT</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'motor-speed-from-topic') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-motor font-semibold">SET SPEED FROM TOPIC</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Motor ${block.motor_id || 1} ← ${(block.topic || '').trim() || '/motor_speed/setpoint'}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'subscribe-motor-speed-topic') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-motor font-semibold">SUBSCRIBE MOTOR SPEED</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Motor ${block.motor_id || 1} ← ${(block.topic || '').trim() || '/motor_speed/setpoint'}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'unsubscribe-motor-speed-topic') {
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-motor font-semibold">UNSUBSCRIBE MOTOR SPEED</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Motor ${block.motor_id || 1}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
             } else {
                 content = `<div class="text-xs text-gray-400 font-mono">#${blockId}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
             }
@@ -902,9 +974,11 @@ const ExecutionEngine = {
         // Clear active blocks panel
         this.updateActiveBlocksPanel();
         
-        // Clean up any active ROS topic subscriptions
-        // Note: We don't clean up all subscriptions, only those that were created during execution
-        // The rosBridge will handle cleanup on disconnect
+        // Clean up motor speed topic subscriptions so motors stop following on Stop
+        if (typeof ROSBridge !== 'undefined' && ROSBridge.unsubscribeFromMotorSpeedTopic) {
+            ROSBridge.unsubscribeFromMotorSpeedTopic(1);
+            ROSBridge.unsubscribeFromMotorSpeedTopic(2);
+        }
         
         // Resume all paused workflows to allow them to exit
         this.activeWorkflows.forEach((workflowState, workflowId) => {
@@ -1071,6 +1145,10 @@ const ExecutionEngine = {
                     duration = motorSpeed > 0 ? Math.abs(effectiveSteps) / motorSpeed : 0.01;
                 } else if (block.type === 'delay') {
                     duration = block.duration || 1.0;
+                } else if (block.type === 'motor-speed-from-topic') {
+                    duration = 0.5; // Typical wait for one Float32 message
+                } else if (block.type === 'subscribe-motor-speed-topic' || block.type === 'unsubscribe-motor-speed-topic') {
+                    duration = 0.01; // Instant
                 } else if (block.type === 'pause') {
                     duration = 2.0; // Assume pause is ~2 seconds for visualization
                 }

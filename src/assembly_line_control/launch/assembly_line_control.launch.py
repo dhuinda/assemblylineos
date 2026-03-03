@@ -74,12 +74,22 @@ def generate_launch_description():
         parameters=[],
     )
     
+    # Optional: map potentiometer to motor speed (publish to /motor_speed/setpoint and /motorN/speed)
+    potentiometer_speed_node = Node(
+        package='assembly_line_control',
+        executable='potentiometer_speed_node',
+        name='potentiometer_speed_node',
+        output='screen',
+        parameters=[],
+    )
+    
     return LaunchDescription([
         rosbridge_port_arg,
         web_port_arg,
         rosbridge_node,
         web_interface_node,
         arduino_controller_node,
-        sensor_controller_node, 
+        sensor_controller_node,
+        potentiometer_speed_node,
     ])
 
