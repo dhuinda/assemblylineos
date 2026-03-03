@@ -683,10 +683,15 @@ const ExecutionEngine = {
             let timeRemaining = 0;
             
             if (block.type === 'motor') {
-                // Use custom speed if set, otherwise use global motor speed
+                // Use custom speed if set, otherwise use global motor speed (for initial estimate)
                 const hasCustomSpeed = block.speed !== undefined && block.speed !== null;
-                const motorSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
-                const speedLabel = hasCustomSpeed ? 'custom' : 'global';
+                const blockOrGlobalSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
+                const motorStatus = ROSBridge.getMotorStatus(block.motor_id);
+                // Use live speed from motor status when available so time/steps remaining reflect speed updates (e.g. potentiometer)
+                const currentSpeed = (motorStatus && motorStatus.speed != null && motorStatus.speed > 0)
+                    ? motorStatus.speed
+                    : blockOrGlobalSpeed;
+                const speedLabel = (motorStatus && motorStatus.speed != null) ? 'live' : (hasCustomSpeed ? 'custom' : 'global');
                 
                 // Apply direction for display (effective steps)
                 let effectiveSteps = block.steps || 0;
@@ -696,16 +701,15 @@ const ExecutionEngine = {
                     effectiveSteps = Math.abs(effectiveSteps);
                 }
                 
-                const motorStatus = ROSBridge.getMotorStatus(block.motor_id);
                 const stepsRemaining = motorStatus ? motorStatus.steps_remaining : null;
                 const totalSteps = effectiveSteps;
                 
-                // Calculate estimated duration and remaining time
-                estimatedDuration = motorSpeed > 0 ? (Math.abs(totalSteps) / motorSpeed) : 0;
+                // Estimated duration at current (or block) speed; time remaining uses current speed
+                estimatedDuration = currentSpeed > 0 ? (Math.abs(totalSteps) / currentSpeed) : 0;
                 
-                if (stepsRemaining !== null && stepsRemaining !== undefined && motorSpeed > 0) {
-                    // Calculate remaining time based on actual steps remaining
-                    timeRemaining = Math.abs(stepsRemaining) / motorSpeed;
+                if (stepsRemaining !== null && stepsRemaining !== undefined && currentSpeed > 0) {
+                    // Recalculate remaining time from actual steps remaining and current (live) speed
+                    timeRemaining = Math.abs(stepsRemaining) / currentSpeed;
                 } else {
                     // Estimate based on elapsed time and total duration
                     timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
@@ -728,7 +732,7 @@ const ExecutionEngine = {
                         <span>Elapsed: ${blockElapsed.toFixed(2)}s</span>
                         <span>Remaining: ${timeRemaining.toFixed(2)}s</span>
                     </div>
-                    <div class="text-xs text-gray-500 mt-1">Est. total: ${estimatedDuration.toFixed(2)}s @ ${motorSpeed} sps (${speedLabel})</div>
+                    <div class="text-xs text-gray-500 mt-1">Est. total: ${estimatedDuration.toFixed(2)}s @ ${currentSpeed.toFixed(0)} sps (${speedLabel})</div>
                 `;
             } else if (block.type === 'relay') {
                 estimatedDuration = 0; // Relays are instant
