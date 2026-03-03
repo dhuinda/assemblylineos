@@ -218,19 +218,26 @@ const ExecutionEngine = {
     },
     
     /**
-     * Wait until motor reports steps_remaining === 0 (or is_moving === false), then continue.
+     * Wait until motor reports steps_remaining === 0 after the move has started.
      * Uses live status from Arduino so speed changes during the move are accounted for.
+     * We must see the motor "start" (steps_remaining > 0 or is_moving true) before accepting
+     * steps_remaining === 0 as complete, so stale idle status from before the command doesn't
+     * cause an instant return.
      * @param {number} motorId - Motor ID (1 or 2)
      * @param {number} timeoutMs - Max wait (ms); use estimated duration * 3 or 5 min
      * @param {number} pollIntervalMs - How often to check status (default 100)
      */
     async waitForMotorComplete(motorId, timeoutMs, pollIntervalMs = 100) {
         const deadline = performance.now() + timeoutMs;
+        let moveStarted = false;  // Must see motor actually moving before we accept 0 as done
         while (this.isExecuting && !this.isPaused && performance.now() < deadline) {
             const status = typeof ROSBridge !== 'undefined' ? ROSBridge.getMotorStatus(motorId) : null;
             const stepsRemaining = status && status.steps_remaining != null ? Math.abs(status.steps_remaining) : null;
             const isMoving = status && status.is_moving != null ? status.is_moving : null;
-            if (stepsRemaining === 0 || (isMoving === false && stepsRemaining === null)) {
+            if (stepsRemaining > 0 || isMoving === true) {
+                moveStarted = true;
+            }
+            if (moveStarted && (stepsRemaining === 0 || isMoving === false)) {
                 return;
             }
             await this.sleep(pollIntervalMs);
