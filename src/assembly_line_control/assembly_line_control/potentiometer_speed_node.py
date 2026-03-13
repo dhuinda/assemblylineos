@@ -4,8 +4,10 @@
 Potentiometer Speed Node for Assembly Line OS
 
 Subscribes to /potentiometer/raw (from Arduino via arduino_controller),
-applies a user-defined mapping (raw 0-1023 -> motor speed in steps/sec),
-and publishes to /motor_speed/setpoint. Optionally publishes to /motor1/speed
+scales motor speed by roll radius so material surface speed stays constant.
+Baseline speed is taken from the last move block (e.g. M1 at 550 sps) via
+motor1/speed or motor2/speed; the param baseline_speed is used until the
+first such message. Publishes to /motor_speed/setpoint. Optionally publishes to /motor1/speed
 and /motor2/speed (default: off) so the pot does not drive the motor at
 startup until the user subscribes to the setpoint topic in the UI.
 
@@ -17,15 +19,59 @@ from rclpy.node import Node
 from std_msgs.msg import Float32
 
 
-def map_pot_to_speed(raw: float, min_speed: float, max_speed: float) -> float:
+def map_pot_to_radius(
+    raw: float,
+    baseline_raw: float,
+    baseline_radius_inches: float,
+    inches_per_count: float,
+    min_radius_inches: float,
+) -> float:
     """
-    Map potentiometer raw value (0-1023) to motor speed (steps/sec).
-    Override this function or use parameters to customize the curve.
-    Default: linear mapping.
+    Map potentiometer raw value to roll radius in inches using a simple
+    affine model derived from calibration data.
+
+    R(raw) = R0 + k * (raw - baseline_raw)
+
+    where:
+      - R0 is baseline_radius_inches
+      - k is inches_per_count (e.g. 4 in / 80 counts = 0.05 in/count)
     """
     raw = max(0.0, min(1023.0, float(raw)))
-    t = raw / 1023.0
-    return min_speed + t * (max_speed - min_speed)
+    radius = baseline_radius_inches + inches_per_count * (raw - baseline_raw)
+    return max(min_radius_inches, radius)
+
+
+def map_radius_to_speed(
+    radius_inches: float,
+    baseline_radius_inches: float,
+    baseline_speed: float,
+    min_speed: float,
+    max_speed: float,
+) -> float:
+    """
+    Map roll radius to motor speed (steps/sec) so that surface speed
+    remains approximately constant.
+
+    For constant linear surface speed v at the roll:
+        v = omega * R
+      => omega ∝ 1 / R
+
+    Since motor step rate is proportional to omega, we scale speed
+    inversely with radius:
+
+        speed(R) = baseline_speed * (R0 / R)
+
+    where:
+      - R0 is baseline_radius_inches (radius at baseline_speed)
+      - R is current radius_inches
+    """
+    if radius_inches <= 0.0:
+        # Should be prevented by min_radius_inches, but guard anyway.
+        radius_inches = baseline_radius_inches
+
+    speed = baseline_speed * (baseline_radius_inches / radius_inches)
+    # Clamp within configured min/max to avoid extreme values.
+    return max(min_speed, min(max_speed, speed))
 
 
 class PotentiometerSpeedNode(Node):
@@ -36,6 +82,14 @@ class PotentiometerSpeedNode(Node):
 
         self.declare_parameter('min_speed', 1.0)
         self.declare_parameter('max_speed', 200.0)
+        # Radius / calibration parameters
+        self.declare_parameter('baseline_raw', 420.0)  # ADC value at baseline radius
+        self.declare_parameter('baseline_radius_inches', 4.0)
+        # From calibration: 4 inches over 80 counts => 0.05 in/count
+        self.declare_parameter('inches_per_count', 0.05)
+        self.declare_parameter('baseline_speed', 200.0)  # steps/sec at baseline radius (used until first move-block speed received)
+        self.declare_parameter('baseline_speed_motor_id', 1)  # motor whose last speed (e.g. from M1 move block) is used as baseline
+        self.declare_parameter('min_radius_inches', 1.0)  # safety clamp for small radius
         self.declare_parameter('publish_motor1', False)  # False = don't drive motor at startup; UI subscribes to setpoint and publishes to motor1/speed when user enables it
         self.declare_parameter('publish_motor2', False)
         self.declare_parameter('publish_rate_hz', 15.0)
@@ -44,6 +98,14 @@ class PotentiometerSpeedNode(Node):
 
         self.min_speed = self.get_parameter('min_speed').value
         self.max_speed = self.get_parameter('max_speed').value
+        self.baseline_raw = float(self.get_parameter('baseline_raw').value)
+        self.baseline_radius_inches = float(self.get_parameter('baseline_radius_inches').value)
+        self.inches_per_count = float(self.get_parameter('inches_per_count').value)
+        self.baseline_speed = float(self.get_parameter('baseline_speed').value)
+        self.baseline_speed_motor_id = int(self.get_parameter('baseline_speed_motor_id').value)
+        if self.baseline_speed_motor_id not in (1, 2):
+            self.baseline_speed_motor_id = 1
+        self.min_radius_inches = float(self.get_parameter('min_radius_inches').value)
         self.publish_motor1 = self.get_parameter('publish_motor1').value
         self.publish_motor2 = self.get_parameter('publish_motor2').value
         self.min_interval = 1.0 / self.get_parameter('publish_rate_hz').value
@@ -61,12 +123,30 @@ class PotentiometerSpeedNode(Node):
         self.pot_sub = self.create_subscription(
             Float32, 'potentiometer/raw',
             self.pot_callback, 10)
+        self.motor1_speed_sub = self.create_subscription(
+            Float32, 'motor1/speed',
+            lambda msg: self._motor_speed_callback(1, msg), 10)
+        self.motor2_speed_sub = self.create_subscription(
+            Float32, 'motor2/speed',
+            lambda msg: self._motor_speed_callback(2, msg), 10)
 
         self.get_logger().info(
             f'Potentiometer speed node started: raw 0-1023 -> {self.min_speed}-{self.max_speed} sps, '
+            f'baseline_speed from motor{self.baseline_speed_motor_id}/speed (last move block), '
             f'motor1={self.publish_motor1}, motor2={self.publish_motor2}, '
             f'smoothing_alpha={self.smoothing_alpha}, deadband={self.speed_deadband}'
         )
+
+    def _motor_speed_callback(self, motor_id: int, msg):
+        """Use speed from last move block (e.g. M1 at 550 sps) as baseline for radius scaling."""
+        if motor_id != self.baseline_speed_motor_id:
+            return
+        speed = max(self.min_speed, min(self.max_speed, float(msg.data)))
+        # Do not overwrite baseline with our own published value (avoid feedback)
+        if self.last_published_speed is not None and abs(speed - self.last_published_speed) <= self.speed_deadband:
+            return
+        self.baseline_speed = speed
+        self.get_logger().debug(f'Baseline speed set to {self.baseline_speed:.1f} sps from motor{motor_id}/speed')
 
     def pot_callback(self, msg):
         import time
@@ -78,8 +158,25 @@ class PotentiometerSpeedNode(Node):
                 self.smoothing_alpha * raw + (1.0 - self.smoothing_alpha) * self.smoothed_raw
             )
 
-        speed = map_pot_to_speed(self.smoothed_raw, self.min_speed, self.max_speed)
-        speed = max(self.min_speed, min(self.max_speed, speed))
+        radius = map_pot_to_radius(
+            self.smoothed_raw,
+            baseline_raw=self.baseline_raw,
+            baseline_radius_inches=self.baseline_radius_inches,
+            inches_per_count=self.inches_per_count,
+            min_radius_inches=self.min_radius_inches,
+        )
+        speed = map_radius_to_speed(
+            radius,
+            baseline_radius_inches=self.baseline_radius_inches,
+            baseline_speed=self.baseline_speed,
+            min_speed=self.min_speed,
+            max_speed=self.max_speed,
+        )
+
+        # Debug-level logging for calibration: raw -> radius -> speed
+        self.get_logger().debug(
+            f'pot raw={self.smoothed_raw:.1f}, radius={radius:.3f} in, speed={speed:.1f} steps/sec'
+        )
 
         # Deadband: only publish when speed changed meaningfully (or first time)
         if self.last_published_speed is not None and abs(speed - self.last_published_speed) < self.speed_deadband:
