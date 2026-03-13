@@ -67,10 +67,15 @@ class ArduinoController(Node):
         # Arduino is source of truth for steps_remaining; only estimate when no recent Arduino status
         self._last_arduino_status_time = {1: 0.0, 2: 0.0}
         self._arduino_status_timeout = 0.4  # Seconds; after this we fall back to time-based estimate
+
+        # Potentiometer raw smoothing (EMA)
+        self._pot_smoothing_alpha = self.get_parameter('potentiometer_smoothing_alpha').value
+        self._pot_smoothed_raw = None  # None until first sample
         
         # Parameters
         self.declare_parameter('serial_port', '')
         self.declare_parameter('serial_baud', 115200)
+        self.declare_parameter('potentiometer_smoothing_alpha', 0.2)  # EMA: 0=heavy smooth, 1=no smooth
         
         # Pin configuration
         self.pin_config = self.load_pin_config()
@@ -409,8 +414,16 @@ class ArduinoController(Node):
                             if msg_type == 'analog':
                                 val = data.get('value')
                                 if isinstance(val, (int, float)):
+                                    raw = max(0.0, min(1023.0, float(val)))
+                                    if self._pot_smoothed_raw is None:
+                                        self._pot_smoothed_raw = raw
+                                    else:
+                                        self._pot_smoothed_raw = (
+                                            self._pot_smoothing_alpha * raw
+                                            + (1.0 - self._pot_smoothing_alpha) * self._pot_smoothed_raw
+                                        )
                                     msg = Float32()
-                                    msg.data = float(val)
+                                    msg.data = self._pot_smoothed_raw
                                     self.potentiometer_raw_pub.publish(msg)
                                     continue
                             if msg_type == 'motor_status':
@@ -430,6 +443,7 @@ class ArduinoController(Node):
                     if consecutive_errors >= max_consecutive_errors:
                         self.get_logger().error(f'Serial connection lost after {consecutive_errors} errors: {e}')
                         self.connected = False
+                        self._pot_smoothed_raw = None  # Reset so next connection starts fresh
                     # Don't break - let the connection monitor handle reconnection
                 time.sleep(0.5)
             except Exception as e:
@@ -714,6 +728,7 @@ class ArduinoController(Node):
         self.connected = False
         self.connection_attempts = 0
         self._disconnect_count = 0
+        self._pot_smoothed_raw = None
         
         # Reload pin configuration before reconnecting
         self.pin_config = self.load_pin_config()

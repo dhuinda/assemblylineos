@@ -84,10 +84,15 @@ bool relay_states[4] = {false, false, false, false};
 
 // Serial communication
 #define SERIAL_BUFFER_MAX 512
-String serialBuffer = "";
+char serialBuffer[SERIAL_BUFFER_MAX];
+size_t serialBufferIndex = 0;
 
-// Minimum step interval in microseconds (for maximum speed protection)
-const unsigned long MIN_STEP_INTERVAL = 50; // 2000 us = 500 steps/sec max
+// Enable or disable verbose debug prints over Serial
+#define DEBUG_SERIAL 0
+
+// Minimum step interval in microseconds (for maximum speed protection).
+// With MIN_STEP_INTERVAL = 200 us, the theoretical max speed is 5,000 steps/sec.
+const unsigned long MIN_STEP_INTERVAL = 200;
 
 void setup() {
   // Initialize serial communication
@@ -144,7 +149,7 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH); // LED on = ready
   
   // Clear serial buffer
-  serialBuffer.reserve(SERIAL_BUFFER_MAX);
+  serialBufferIndex = 0;
   
   Serial.println("Initialization complete");
   Serial.println("Waiting for commands...");
@@ -192,17 +197,18 @@ void readSerialCommands() {
     
     if (inChar == '\n' || inChar == '\r') {
       // Process complete command
-      if (serialBuffer.length() > 0) {
-        processCommand(serialBuffer);
+      if (serialBufferIndex > 0) {
+        serialBuffer[serialBufferIndex] = '\0';
+        processCommand(String(serialBuffer));
       }
-      serialBuffer = "";
+      serialBufferIndex = 0;
     } else {
-      if (serialBuffer.length() < SERIAL_BUFFER_MAX) {
-        serialBuffer += inChar;
+      if (serialBufferIndex < (SERIAL_BUFFER_MAX - 1)) {
+        serialBuffer[serialBufferIndex++] = inChar;
       }
       // If buffer overflows, discard and reset to avoid memory exhaustion / hang
       else {
-        serialBuffer = "";
+        serialBufferIndex = 0;
         // Discard rest of line so we don't start mid-command
         while (Serial.available() > 0) {
           char c = Serial.read();
@@ -220,9 +226,11 @@ void processCommand(String command) {
   
   command.trim();
   
-  // Debug: Echo received command
+  // Debug: Echo received command (optional)
+#if DEBUG_SERIAL
   Serial.print("Received: ");
   Serial.println(command);
+#endif
   
   // Check if it's an E-STOP command (highest priority)
   if (command.indexOf("\"type\":\"estop\"") >= 0 || command.indexOf("\"type\": \"estop\"") >= 0) {
@@ -473,7 +481,8 @@ void processMotorCommand(String command) {
   // Extract speed (if provided)
   float speed = extractFloat(command, "speed");
   if (speed > 0) {
-    motor_speeds[motor_index] = constrain(speed, 1.0, 6500);
+    // Allow speeds up to 5,000 steps/sec (limited further by MIN_STEP_INTERVAL).
+    motor_speeds[motor_index] = constrain(speed, 1.0, 5000.0);
     motors[motor_index].step_interval = calculateStepInterval(motor_speeds[motor_index]);
   }
   
@@ -597,11 +606,14 @@ void updateMotors() {
   }
 }
 
+// Minimum step pulse width in microseconds. Most stepper drivers require 1–2 µs.
+// Keep this as small as reliably supported by your drivers.
+#define STEP_PULSE_WIDTH_US 2
+
 void stepMotor(int motor_index) {
-  // Generate a step pulse for a stepper motor
-  // Most stepper drivers need a rising edge on STEP pin
+  // Generate a step pulse for a stepper motor (rising edge on STEP pin)
   digitalWrite(MOTOR_PINS[motor_index][0], HIGH);
-  delayMicroseconds(2); // Minimum pulse width (usually 1-2 microseconds)
+  delayMicroseconds(STEP_PULSE_WIDTH_US);
   digitalWrite(MOTOR_PINS[motor_index][0], LOW);
 }
 
