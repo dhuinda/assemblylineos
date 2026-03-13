@@ -68,14 +68,15 @@ class ArduinoController(Node):
         self._last_arduino_status_time = {1: 0.0, 2: 0.0}
         self._arduino_status_timeout = 0.4  # Seconds; after this we fall back to time-based estimate
 
-        # Potentiometer raw smoothing (EMA)
-        self._pot_smoothing_alpha = self.get_parameter('potentiometer_smoothing_alpha').value
+        # Potentiometer raw smoothing (EMA) - set after parameters are declared
         self._pot_smoothed_raw = None  # None until first sample
         
-        # Parameters
+        # Parameters (declare before any get_parameter)
         self.declare_parameter('serial_port', '')
         self.declare_parameter('serial_baud', 115200)
         self.declare_parameter('potentiometer_smoothing_alpha', 0.2)  # EMA: 0=heavy smooth, 1=no smooth
+        
+        self._pot_smoothing_alpha = self.get_parameter('potentiometer_smoothing_alpha').value
         
         # Pin configuration
         self.pin_config = self.load_pin_config()
