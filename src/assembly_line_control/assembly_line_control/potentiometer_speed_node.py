@@ -93,7 +93,7 @@ class PotentiometerSpeedNode(Node):
         self.declare_parameter('publish_motor1', False)  # False = don't drive motor at startup; UI subscribes to setpoint and publishes to motor1/speed when user enables it
         self.declare_parameter('publish_motor2', False)
         self.declare_parameter('publish_rate_hz', 15.0)
-        self.declare_parameter('smoothing_alpha', 0.2)   # EMA: 0=heavy smooth, 1=no smooth; 0.2 reduces ADC jitter
+        self.declare_parameter('smoothing_alpha', 0.6)   # EMA: 0=heavy smooth, 1=no smooth; 0.2 reduces ADC jitter
         self.declare_parameter('speed_deadband', 15.0)   # Only publish if speed changes by more than this (steps/sec)
 
         self.min_speed = self.get_parameter('min_speed').value
