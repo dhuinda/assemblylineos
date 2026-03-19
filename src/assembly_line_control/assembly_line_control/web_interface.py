@@ -13,6 +13,7 @@ from rclpy.node import Node
 from std_msgs.msg import String, Int32
 import json
 import os
+import re
 import threading
 import socket
 from ament_index_python.packages import get_package_share_directory
@@ -262,6 +263,43 @@ def remote():
     """Serve the mobile remote view (project select, manual controls, start/stop/e-stop)."""
     rosbridge_url = get_rosbridge_url()
     return render_template('remote.html', rosbridge_url=rosbridge_url)
+
+
+def _package_meta_version():
+    """Version string from installed package.xml or source tree."""
+    ver = ''
+    try:
+        share = get_package_share_directory('assembly_line_control')
+        px = Path(share) / 'package.xml'
+        if px.is_file():
+            txt = px.read_text(encoding='utf-8', errors='ignore')
+            m = re.search(r'<version>([^<]+)</version>', txt)
+            if m:
+                ver = m.group(1).strip()
+    except Exception:
+        pass
+    if not ver:
+        try:
+            src_px = Path(__file__).resolve().parents[1] / 'package.xml'
+            if src_px.is_file():
+                txt = src_px.read_text(encoding='utf-8', errors='ignore')
+                m = re.search(r'<version>([^<]+)</version>', txt)
+                if m:
+                    ver = m.group(1).strip()
+        except Exception:
+            pass
+    return ver
+
+
+@app.route('/api/version')
+def api_version():
+    """Package version and optional git rev for Control Center footer."""
+    git = os.environ.get('ASSEMBLY_LINE_GIT_REV', '').strip()
+    return jsonify({
+        'package': 'assembly_line_control',
+        'version': _package_meta_version(),
+        'git': git,
+    })
 
 
 def get_settings_path():

@@ -25,6 +25,8 @@
             </div>
         </header>
 
+        <div id="remoteHwStrip" class="text-[10px] flex flex-wrap gap-2 mb-2 px-1 font-mono min-h-[1rem]" aria-live="polite"></div>
+
         <!-- Project selector -->
         <section class="card p-3 remote-section">
             <label class="block text-xs font-semibold text-[var(--text-muted)] mb-2">PROJECT</label>
@@ -410,6 +412,21 @@
             updateMotorRunButtons(1);
             updateMotorRunButtons(2);
             updateBothMotorsRunButtons();
+            function remoteHwStripTick() {
+                var el = document.getElementById('remoteHwStrip');
+                if (el && typeof ROSBridge !== 'undefined') {
+                    var rosOk = ROSBridge.isConnected;
+                    var ard = ROSBridge.arduinoStatus;
+                    var ardOk = ard && ard.connected;
+                    var run = ROSBridge.executionSyncState && ROSBridge.executionSyncState.running;
+                    el.innerHTML =
+                        '<span class="' + (rosOk ? 'text-green-400' : 'text-red-400') + '">' + (rosOk ? 'ROS●' : 'ROS○') + '</span>' +
+                        ' <span class="' + (ardOk ? 'text-green-400' : 'text-yellow-500') + '">' + (ard ? (ardOk ? 'ARD●' : 'ARD○') : 'ARD…') + '</span>' +
+                        ' <span class="' + (run ? 'text-amber-400 font-bold' : 'text-gray-500') + '">' + (run ? 'RUN' : 'idle') + '</span>';
+                }
+                requestAnimationFrame(remoteHwStripTick);
+            }
+            remoteHwStripTick();
         });
     </script>
 </body>

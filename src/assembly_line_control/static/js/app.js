@@ -83,6 +83,10 @@ const App = {
         if (ROSBridge.executionSyncState && ROSBridge.executionSyncState.running) {
             window.onExecutionStateUpdate(ROSBridge.executionSyncState);
         }
+
+        if (typeof ControlCenter !== 'undefined') {
+            ControlCenter.init();
+        }
         
         // When active blocks state is received from executor (another device), update playback panel
         window.onActiveBlocksUpdate = (data) => {

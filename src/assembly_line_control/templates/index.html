@@ -94,6 +94,7 @@
                     <p id="rosBridgeUrl" class="text-xs text-gray-500 whitespace-nowrap">{{ rosbridge_url|default("ws://localhost:9090") }}</p>
                 </div>
             </div>
+            <div id="headerExecutionStrip" class="hidden mt-1 pt-1 border-t border-gray-700 flex flex-wrap items-center gap-2 text-xs"></div>
         </div>
 
         <div class="flex flex-1 min-h-0 w-full gap-2" style="overflow: hidden;">
@@ -102,27 +103,64 @@
                 <div class="card flex flex-col flex-1 min-h-0" style="height: 100%; overflow: hidden;">
                     <!-- Sidebar Tabs -->
                     <div class="flex border-b border-gray-700 flex-shrink-0">
+                        <button onclick="switchSidebarTab('control')" 
+                                id="sidebarTab-control"
+                                class="sidebar-tab flex-1 px-2 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors active"
+                                title="Control center (Ctrl+`)">
+                            SYSTEM
+                        </button>
                         <button onclick="switchSidebarTab('palette')" 
                                 id="sidebarTab-palette"
-                                class="sidebar-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors active">
+                                class="sidebar-tab flex-1 px-2 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
                             BLOCKS
                         </button>
                         <button onclick="switchSidebarTab('speed')" 
                                 id="sidebarTab-speed"
-                                class="sidebar-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
+                                class="sidebar-tab flex-1 px-2 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
                             SPEED
                         </button>
                         <button onclick="switchSidebarTab('controls')" 
                                 id="sidebarTab-controls"
-                                class="sidebar-tab flex-1 px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
+                                class="sidebar-tab flex-1 px-2 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors">
                             CONTROLS
                         </button>
                     </div>
                     
                     <!-- Sidebar Content -->
                     <div class="p-3 flex-1 min-h-0" style="overflow-y: auto; overflow-x: hidden;">
+                        <!-- Control Center Panel -->
+                        <div id="sidebarPanel-control" class="sidebar-panel control-center space-y-3 text-xs">
+                            <div id="ccSessionStrip" class="control-center-card rounded border border-gray-600 p-2 space-y-1"></div>
+                            <div id="ccSafetyStrip" class="control-center-card rounded border border-gray-600 p-2 flex flex-wrap gap-2 items-center"></div>
+                            <div id="ccBootChecklist" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div id="ccSubsystemMatrix" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <label class="flex items-center gap-1 text-gray-400 cursor-pointer">
+                                    <input type="checkbox" id="ccPauseLive"> Pause live
+                                </label>
+                                <button type="button" onclick="ControlCenter.reconnectArduino()" class="btn-secondary px-2 py-0.5 text-xs">Reconnect Arduino</button>
+                                <button type="button" onclick="ControlCenter.exportIncidentLog()" class="btn-secondary px-2 py-0.5 text-xs">Export log</button>
+                                <button type="button" onclick="ROSBridge.emergencyStop()" class="btn-danger px-2 py-0.5 text-xs font-bold">E-STOP</button>
+                            </div>
+                            <div id="ccLiveMotors" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div id="ccLiveRelays" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div id="ccLivePot" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div id="ccLiveSensors" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div id="ccSerialLog" class="control-center-card rounded border border-gray-600 p-2 max-h-28 overflow-y-auto font-mono text-[10px] text-gray-400"></div>
+                            <div id="ccPreflight" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div id="ccSelfTest" class="control-center-card rounded border border-gray-600 p-2"></div>
+                            <div class="control-center-card rounded border border-gray-600 p-2">
+                                <div class="text-gray-500 mb-1">Incident log</div>
+                                <div class="flex gap-2 mb-2">
+                                    <label class="flex items-center gap-1 text-gray-400"><input type="radio" name="ccIncFilter" value="all" checked> All</label>
+                                    <label class="flex items-center gap-1 text-gray-400"><input type="radio" name="ccIncFilter" value="err"> Errors</label>
+                                </div>
+                                <div id="ccIncidentLog" class="max-h-32 overflow-y-auto font-mono text-[10px] space-y-0.5"></div>
+                            </div>
+                            <div id="ccVersionFooter" class="text-[10px] text-gray-500 pt-1"></div>
+                        </div>
                         <!-- Block Palette Panel -->
-                        <div id="sidebarPanel-palette" class="sidebar-panel">
+                        <div id="sidebarPanel-palette" class="sidebar-panel hidden">
                             <div class="space-y-2" id="blockPalette">
                                 <!-- Events Section -->
                                 <div class="palette-section">
@@ -937,6 +975,7 @@
     <script src="{{ url_for('static', filename='js/uiUtils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/simulation_engine.js') }}"></script>
     <script src="{{ url_for('static', filename='js/rosBridge.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/controlCenter.js') }}"></script>
     <script src="{{ url_for('static', filename='js/motorSpeedManager.js') }}"></script>
     <script src="{{ url_for('static', filename='js/blockSystem.js') }}"></script>
     <script src="{{ url_for('static', filename='js/blockRenderer.js') }}"></script>
@@ -1214,6 +1253,13 @@
             }
             // Load saved panel sizes
             loadPanelSizes();
+            // Restore last sidebar tab if user chose one before (default HTML = SYSTEM)
+            try {
+                const savedTab = localStorage.getItem('assemblyLineSidebarTab');
+                if (savedTab && ['control', 'palette', 'speed', 'controls'].includes(savedTab)) {
+                    switchSidebarTab(savedTab);
+                }
+            } catch (e) {}
         });
 
         // Sidebar tab switching
@@ -1239,6 +1285,9 @@
             if (tab) {
                 tab.classList.add('active');
             }
+            try {
+                localStorage.setItem('assemblyLineSidebarTab', tabName);
+            } catch (e) {}
         }
 
         // Bottom panel tab switching
@@ -1462,6 +1511,9 @@
                 status.textContent = 'OFF';
                 status.className = 'text-xs font-medium text-gray-500 whitespace-nowrap';
                 UIUtils.log('[SIMULATION] Simulation mode disabled', 'warning');
+            }
+            if (typeof ControlCenter !== 'undefined' && ROSBridge && ROSBridge.executionSyncState) {
+                ControlCenter.onExecutionState(ROSBridge.executionSyncState);
             }
         }
         

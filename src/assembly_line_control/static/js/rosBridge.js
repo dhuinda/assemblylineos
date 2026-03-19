@@ -22,8 +22,31 @@ const ROSBridge = {
     activeBlocksSub: null,
     motor1StatusSub: null,
     motor2StatusSub: null,
+    arduinoStatusSub: null,
+    relayStatusSubs: [],
+    potentiometerSub: null,
+    motorSpeedSetpointSub: null,
+    motor1SpeedEchoSub: null,
+    motor2SpeedEchoSub: null,
+    serialLogSub: null,
     motorStatus: {}, // Keep track of each motor's status
+    /** Last parsed Arduino connection status { connected, port, baud } */
+    arduinoStatus: null,
+    /** relayId -> { relay_id, state, lastChangeMs, lastPayload } */
+    relayStates: { 1: null, 2: null, 3: null, 4: null },
+    lastPotRaw: null,
+    lastPotAtMs: 0,
+    /** Latest Float32 from /motor_speed/setpoint when present */
+    motorSpeedSetpoint: null,
+    /** Last speed msgs observed on /motorN/speed (bus echo / commanded) */
+    topicMotorSpeed: { 1: null, 2: null },
+    /** topicName -> { lastT, hz, count, windowStart, windowCount } */
+    telemetryMeta: {},
+    /** Last raw message string per topic (for Control Center copy) */
+    telemetryLastRaw: {},
     isConnected: false,
+    wsSessionStartMs: 0,
+    wsReconnectCount: 0,
     /** Shared execution state across all clients: { running, projectId, clientId } */
     executionSyncState: { running: false, projectId: null, clientId: null },
     dynamicSubscriptions: new Map(), // For subscribing to topics on the fly
@@ -32,7 +55,33 @@ const ROSBridge = {
     messageThrottle: new Map(), // Slow down updates that come too fast
     connectionQuality: { latency: 0, messageRate: 0, lastMessageTime: null }, // How's the connection doing?
     parseCache: new Map(), // Cache parsed JSON so we don't parse the same thing twice
-    
+
+    recordTelemetry(topicName, rawPayload = null) {
+        const now = performance.now();
+        let m = this.telemetryMeta[topicName];
+        if (!m) {
+            m = this.telemetryMeta[topicName] = { lastT: 0, hz: 0, count: 0, windowStart: now, windowCount: 0 };
+        }
+        m.count++;
+        m.lastT = now;
+        m.windowCount++;
+        const dt = now - m.windowStart;
+        if (dt >= 1000) {
+            m.hz = m.windowCount / (dt / 1000);
+            m.windowCount = 0;
+            m.windowStart = now;
+        }
+        if (rawPayload !== null && rawPayload !== undefined) {
+            this.telemetryLastRaw[topicName] = typeof rawPayload === 'string' ? rawPayload : JSON.stringify(rawPayload);
+        }
+    },
+
+    getTelemetryAgeSec(topicName) {
+        const m = this.telemetryMeta[topicName];
+        if (!m || !m.lastT) return null;
+        return (performance.now() - m.lastT) / 1000;
+    },
+
     /**
      * Parse JSON safely, with caching to avoid parsing the same thing twice
      * @param {string} jsonString - The JSON string to parse
@@ -83,9 +132,11 @@ const ROSBridge = {
         this.ros.on('connection', () => {
             UIUtils.log('[ROS] Connected to ROS Bridge', 'success');
             this.isConnected = true;
+            this.wsSessionStartMs = Date.now();
             UIUtils.updateRosStatus(true);
             this.initializePublishers();
             this.initializeSubscribers();
+            if (typeof ControlCenter !== 'undefined') ControlCenter.onRosConnected();
         });
 
         this.ros.on('error', (error) => {
@@ -97,11 +148,13 @@ const ROSBridge = {
         this.ros.on('close', () => {
             UIUtils.log('[ROS] Connection closed', 'error');
             this.isConnected = false;
+            this.wsReconnectCount = (this.wsReconnectCount || 0) + 1;
             UIUtils.updateRosStatus(false);
-            
+            if (typeof ControlCenter !== 'undefined') ControlCenter.onRosDisconnected();
+
             // Clean up any subscriptions we made
             this.cleanupDynamicSubscriptions();
-            
+
             // Try to reconnect after a short delay
             setTimeout(() => {
                 this.init();
@@ -294,10 +347,29 @@ const ROSBridge = {
      * Set up subscribers so we can listen for status updates from motors
      */
     initializeSubscribers() {
+        const dropSub = (sub) => {
+            if (sub) try { sub.unsubscribe(); } catch (e) { /* ignore */ }
+        };
+        dropSub(this.motor1StatusSub);
+        dropSub(this.motor2StatusSub);
+        dropSub(this.arduinoStatusSub);
+        this.relayStatusSubs.forEach(dropSub);
+        this.relayStatusSubs = [];
+        dropSub(this.potentiometerSub);
+        dropSub(this.motorSpeedSetpointSub);
+        dropSub(this.motor1SpeedEchoSub);
+        dropSub(this.motor2SpeedEchoSub);
+        dropSub(this.serialLogSub);
+        dropSub(this.sensorStatusSub);
+        this.sensorStatusSub = null;
+        dropSub(this.executionStateSub);
+        dropSub(this.executionStopRequestSub);
+        dropSub(this.activeBlocksSub);
+
         // Listen for motor status updates
         // Throttle to 10Hz (100ms) to match the ROS publisher rate and reduce jitter
         const motorStatusThrottle = 100;
-        
+
         this.motor1StatusSub = new ROSLIB.Topic({
             ros: this.ros,
             name: '/motor1/status',
@@ -305,17 +377,15 @@ const ROSBridge = {
         });
         this.motor1StatusSub.subscribe((msg) => {
             try {
+                this.recordTelemetry('/motor1/status', msg.data);
                 const now = performance.now();
                 const lastUpdate = this.messageThrottle.get('/motor1/status')?.lastUpdate || 0;
-                
-                // Only process if enough time has passed (throttling)
+
                 if (now - lastUpdate >= motorStatusThrottle) {
                     const status = this.safeJsonParse(msg.data, '/motor1/status');
                     if (status) {
                         this.motorStatus[1] = status;
                         this.messageThrottle.set('/motor1/status', { lastUpdate: now, throttleMs: motorStatusThrottle });
-                        
-                        // Update our connection quality stats
                         this.updateConnectionQuality();
                     }
                 }
@@ -331,17 +401,15 @@ const ROSBridge = {
         });
         this.motor2StatusSub.subscribe((msg) => {
             try {
+                this.recordTelemetry('/motor2/status', msg.data);
                 const now = performance.now();
                 const lastUpdate = this.messageThrottle.get('/motor2/status')?.lastUpdate || 0;
-                
-                // Throttle updates to reduce parsing overhead
+
                 if (now - lastUpdate >= motorStatusThrottle) {
                     const status = this.safeJsonParse(msg.data, '/motor2/status');
                     if (status) {
                         this.motorStatus[2] = status;
                         this.messageThrottle.set('/motor2/status', { lastUpdate: now, throttleMs: motorStatusThrottle });
-                        
-                        // Update connection quality metrics
                         this.updateConnectionQuality();
                     }
                 }
@@ -349,6 +417,107 @@ const ROSBridge = {
                 console.error('Failed to parse motor2 status:', e);
             }
         });
+
+        this.arduinoStatusSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/arduino/status',
+            messageType: 'std_msgs/String'
+        });
+        this.arduinoStatusSub.subscribe((msg) => {
+            try {
+                this.recordTelemetry('/arduino/status', msg.data);
+                const data = this.safeJsonParse(msg.data, '/arduino/status');
+                if (data && typeof data.connected === 'boolean') {
+                    this.arduinoStatus = data;
+                }
+            } catch (e) {
+                console.error('[ROS] arduino/status parse error:', e);
+            }
+        });
+
+        for (let rid = 1; rid <= 4; rid++) {
+            const topicName = `/relay${rid}/status`;
+            const sub = new ROSLIB.Topic({
+                ros: this.ros,
+                name: topicName,
+                messageType: 'std_msgs/String'
+            });
+            sub.subscribe((msg) => {
+                try {
+                    this.recordTelemetry(topicName, msg.data);
+                    const data = this.safeJsonParse(msg.data, topicName);
+                    if (data && data.relay_id != null) {
+                        const prev = this.relayStates[rid];
+                        const state = (data.state || 'off').toLowerCase();
+                        const lastChangeMs = (!prev || prev.state !== state) ? Date.now() : prev.lastChangeMs;
+                        this.relayStates[rid] = {
+                            relay_id: data.relay_id,
+                            state,
+                            lastChangeMs,
+                            lastPayload: msg.data
+                        };
+                    }
+                } catch (e) {
+                    console.error(`[ROS] ${topicName} parse error:`, e);
+                }
+            });
+            this.relayStatusSubs.push(sub);
+        }
+
+        this.potentiometerSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/potentiometer/raw',
+            messageType: 'std_msgs/Float32'
+        });
+        this.potentiometerSub.subscribe((msg) => {
+            this.recordTelemetry('/potentiometer/raw', String(msg.data));
+            this.lastPotRaw = msg.data;
+            this.lastPotAtMs = Date.now();
+        });
+
+        this.motorSpeedSetpointSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/motor_speed/setpoint',
+            messageType: 'std_msgs/Float32'
+        });
+        this.motorSpeedSetpointSub.subscribe((msg) => {
+            this.recordTelemetry('/motor_speed/setpoint', String(msg.data));
+            this.motorSpeedSetpoint = msg.data;
+        });
+
+        this.motor1SpeedEchoSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/motor1/speed',
+            messageType: 'std_msgs/Float32'
+        });
+        this.motor1SpeedEchoSub.subscribe((msg) => {
+            this.recordTelemetry('/motor1/speed_bus', String(msg.data));
+            this.topicMotorSpeed[1] = msg.data;
+        });
+
+        this.motor2SpeedEchoSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/motor2/speed',
+            messageType: 'std_msgs/Float32'
+        });
+        this.motor2SpeedEchoSub.subscribe((msg) => {
+            this.recordTelemetry('/motor2/speed_bus', String(msg.data));
+            this.topicMotorSpeed[2] = msg.data;
+        });
+
+        this.serialLogSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/arduino/serial_log',
+            messageType: 'std_msgs/String'
+        });
+        this.serialLogSub.subscribe((msg) => {
+            this.recordTelemetry('/arduino/serial_log', msg.data);
+            if (typeof window.onArduinoSerialLog === 'function') {
+                window.onArduinoSerialLog(msg.data);
+            }
+        });
+
+        this.ensureSensorStatusSubscription();
         
         // Execution sync: so all instances (main + remote) see same playback state
         this.executionStateSub = new ROSLIB.Topic({
@@ -358,6 +527,7 @@ const ROSBridge = {
         });
         this.executionStateSub.subscribe((msg) => {
             try {
+                this.recordTelemetry('/assembly_line/execution_state', msg.data);
                 const data = this.safeJsonParse(msg.data, '/assembly_line/execution_state');
                 if (data && typeof data.running === 'boolean') {
                     this.executionSyncState = {
@@ -415,7 +585,28 @@ const ROSBridge = {
         
         UIUtils.log('[ROS] Subscribers initialized', 'success');
     },
-    
+
+    ensureSensorStatusSubscription() {
+        if (this.sensorStatusSub && this.sensorStatusSub.ros === this.ros) return;
+        if (this.sensorStatusSub) try { this.sensorStatusSub.unsubscribe(); } catch (e) { /* ignore */ }
+        this.sensorStatusSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/sensor/status',
+            messageType: 'std_msgs/String'
+        });
+        this.sensorStatusSub.subscribe((msg) => {
+            try {
+                this.recordTelemetry('/sensor/status', msg.data);
+                const status = this.safeJsonParse(msg.data, '/sensor/status');
+                if (status && status.sensor_id) {
+                    this.sensorStates.set(status.sensor_id, status);
+                }
+            } catch (e) {
+                console.error('Failed to parse sensor status:', e);
+            }
+        });
+    },
+
     /**
      * Get motor status
      * @param {number} motorId - Motor ID
@@ -1152,25 +1343,7 @@ const ROSBridge = {
                 }
             };
             
-            // Subscribe to sensor status if not already subscribed
-            if (!this.sensorStatusSub) {
-                this.sensorStatusSub = new ROSLIB.Topic({
-                    ros: this.ros,
-                    name: '/sensor/status',
-                    messageType: 'std_msgs/String'
-                });
-                
-                this.sensorStatusSub.subscribe((msg) => {
-                    try {
-                        const status = this.safeJsonParse(msg.data, '/sensor/status');
-                        if (status && status.sensor_id) {
-                            this.sensorStates.set(status.sensor_id, status);
-                        }
-                    } catch (e) {
-                        console.error('Failed to parse sensor status:', e);
-                    }
-                });
-            }
+            this.ensureSensorStatusSubscription();
             
             // Check immediately
             checkCondition();

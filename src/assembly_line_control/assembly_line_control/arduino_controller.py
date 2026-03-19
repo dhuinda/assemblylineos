@@ -90,7 +90,9 @@ class ArduinoController(Node):
         self.relay4_status_pub = self.create_publisher(String, 'relay4/status', 10)
         self.connection_status_pub = self.create_publisher(String, 'arduino/status', 10)
         self.potentiometer_raw_pub = self.create_publisher(Float32, 'potentiometer/raw', 10)
-        
+        self.serial_log_pub = self.create_publisher(String, 'arduino/serial_log', 10)
+        self._serial_log_times = []  # monotonic timestamps for rate limiting (max 10/s)
+
         # Initialize serial connection (after publishers are created)
         self.init_serial_connection()
         
@@ -406,7 +408,7 @@ class ArduinoController(Node):
                     line = line.strip()
                     if line:
                         consecutive_errors = 0  # Reset on valid data
-                        # Parse JSON messages from Arduino; don't log to reduce noise
+                        handled = False
                         try:
                             data = json.loads(line)
                             if not isinstance(data, dict):
@@ -426,16 +428,17 @@ class ArduinoController(Node):
                                     msg = Float32()
                                     msg.data = self._pot_smoothed_raw
                                     self.potentiometer_raw_pub.publish(msg)
-                                    continue
-                            if msg_type == 'motor_status':
+                                    handled = True
+                            elif msg_type == 'motor_status':
                                 motor_id = data.get('motor_id')
                                 if motor_id in (1, 2):
                                     self._apply_arduino_motor_status(motor_id, data)
-                                    continue
+                                    handled = True
                         except (json.JSONDecodeError, TypeError, ValueError):
                             pass
-                        # Log all other Arduino responses at info level
-                        self.get_logger().info(f'[Arduino] {line}')
+                        if not handled:
+                            self.get_logger().info(f'[Arduino] {line}')
+                            self._maybe_publish_serial_log(line)
                 
                 time.sleep(0.01)
             except serial.SerialException as e:
@@ -452,6 +455,21 @@ class ArduinoController(Node):
                     self.get_logger().error(f'Error reading serial: {e}')
                 time.sleep(0.1)
     
+    def _maybe_publish_serial_log(self, text: str):
+        """Rate-limited publish of non-handled Arduino serial lines for UI diagnostics."""
+        if not text:
+            return
+        if len(text) > 500:
+            text = text[:500] + '…'
+        now = time.monotonic()
+        self._serial_log_times = [t for t in self._serial_log_times if now - t < 1.0]
+        if len(self._serial_log_times) >= 10:
+            return
+        self._serial_log_times.append(now)
+        msg = String()
+        msg.data = text
+        self.serial_log_pub.publish(msg)
+
     def send_command(self, command: dict):
         """Send a JSON command to the Arduino (thread-safe)"""
         if not self.connected or not self.serial_port or not self.serial_port.is_open:

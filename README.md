@@ -57,6 +57,22 @@ ros2 launch assembly_line_control assembly_line_control.launch.py
 
 Then open your browser to `http://localhost:1111`
 
+### Control Center (SYSTEM tab)
+
+The desktop UI opens on the **SYSTEM** sidebar tab by default. Use it to:
+
+- See **Rosbridge**, **Arduino serial**, **motors**, **potentiometer**, **speed setpoint**, and **registered sensors** in one place
+- Read **live telemetry**: motor progress, relay states, potentiometer strip + sparkline, sensor table, and **Arduino serial lines** that are not high-rate `analog` / `motor_status` JSON (published on `/arduino/serial_log`, rate-limited)
+- Run **pre-flight** checkboxes and **guided checks** (stored per browser session)
+- **Reconnect Arduino** (`POST /api/arduino/reconnect`) and use **E-STOP** next to other status actions
+- Export an **incident log** of UI/ROS messages; optional build info from **`GET /api/version`**
+
+**Keyboard:** `Ctrl+`` (backtick) jumps to the SYSTEM tab. The last sidebar tab is remembered in `localStorage` (`assemblyLineSidebarTab`).
+
+**Simulation:** When simulation is ON, the header strip warns that there is no physical motion.
+
+**Remote:** The mobile `/remote` page shows a compact **ROS / ARD / RUN** status line under the header.
+
 ## How It Works
 
 1. **Create Workflows**: Use the block palette to drag motor and relay control blocks onto the canvas
@@ -73,6 +89,12 @@ The system communicates with your hardware through ROS 2 topics, making it easy 
 - `/relay/command` - Relay commands (JSON format)
 - `/motor1/status`, `/motor2/status` - Motor status updates
 - `/relay1/status` through `/relay4/status` - Relay state updates
+- `/arduino/status` - Arduino connection (`connected`, `port`, `baud`)
+- `/potentiometer/raw` - Smoothed analog 0–1023 from Arduino
+- `/motor_speed/setpoint` - Optional speed setpoint (e.g. from potentiometer node)
+- `/sensor/status` - Per-sensor JSON from `sensor_controller` (after `sensor/register`)
+- `/assembly_line/execution_state` - Shared run/stop sync across browsers
+- `/arduino/serial_log` - Other Arduino JSON / non-handled lines (for Control Center), rate-limited
 
 ## License
 
