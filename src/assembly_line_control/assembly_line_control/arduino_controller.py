@@ -53,10 +53,11 @@ class ArduinoController(Node):
         self.reconnect_delay = 5.0  # seconds between reconnection attempts
         self.last_successful_port = None
         
-        # Connection status stability - prevent flickering
-        self._last_published_connected = None  # Track last published state
-        self._disconnect_count = 0  # Count consecutive disconnect indicators
-        self._disconnect_threshold = 2  # Need this many consecutive failures to mark disconnected
+        # Published /arduino/status stability (UI): avoid flipping on transient serial errors
+        self._last_published_connected = None  # Track last logged state
+        # Internal link can drop briefly; require this many 5s timer ticks (~10s) before publishing disconnected
+        self._arduino_status_false_ticks = 0
+        self._arduino_status_false_ticks_required = 2
 
         # Throttle speed-change logging (only log when speed changes meaningfully)
         self._last_logged_speed = {1: None, 2: None}
@@ -275,7 +276,7 @@ class ArduinoController(Node):
             self.connected = True
             self.last_successful_port = port
             self.connection_attempts = 0
-            self._disconnect_count = 0
+            self._arduino_status_false_ticks = 0
             self.get_logger().info(f'✓ Connected to Arduino on {port} at {self.serial_baud} baud')
             
             # Immediately publish connection status
@@ -388,7 +389,8 @@ class ArduinoController(Node):
         """Background thread to read Arduino responses"""
         buffer = ""
         consecutive_errors = 0
-        max_consecutive_errors = 5  # Only mark disconnected after multiple failures
+        # USB/serial can throw brief bursts of SerialException; require sustained failures before disconnect
+        max_consecutive_errors = 15
         
         while self.running:
             try:
@@ -746,7 +748,7 @@ class ArduinoController(Node):
         # Mark as disconnected to trigger reconnection
         self.connected = False
         self.connection_attempts = 0
-        self._disconnect_count = 0
+        self._arduino_status_false_ticks = 0
         self._pot_smoothed_raw = None
         
         # Reload pin configuration before reconnecting
@@ -777,10 +779,28 @@ class ArduinoController(Node):
         self.get_logger().info(f'Arduino status: connected on {self.last_successful_port}')
     
     def publish_connection_status(self):
-        """Publish Arduino connection status periodically so new clients get it"""
-        # Simple logic: if we have a successful port and connected flag is true, we're connected
-        is_connected = self.connected and self.last_successful_port is not None
-        
+        """Publish Arduino connection status periodically so new clients get it.
+
+        Debounces ``connected: False`` in the JSON: the read thread may clear ``self.connected``
+        briefly after transient pyserial errors, which caused Control Center to flicker. We only
+        publish disconnected after several consecutive timer periods with an internally-dead link,
+        while still publishing connected immediately when the link is good.
+        """
+        internal_ok = bool(self.connected and self.last_successful_port is not None)
+
+        if internal_ok:
+            self._arduino_status_false_ticks = 0
+            is_connected = True
+        elif self.last_successful_port is None:
+            # Never had a link — do not pretend "connected" during debounce window
+            self._arduino_status_false_ticks = 0
+            is_connected = False
+        else:
+            self._arduino_status_false_ticks += 1
+            is_connected = (
+                self._arduino_status_false_ticks < self._arduino_status_false_ticks_required
+            )
+
         # Always publish current status so new browser connections receive it
         status = {
             'connected': is_connected,
@@ -790,8 +810,8 @@ class ArduinoController(Node):
         msg = String()
         msg.data = json.dumps(status)
         self.connection_status_pub.publish(msg)
-        
-        # Only log if state changed
+
+        # Only log if stabilized published state changed
         if self._last_published_connected != is_connected:
             self._last_published_connected = is_connected
             if is_connected:

@@ -1,29 +1,34 @@
 /*
  * Assembly Line Control - Arduino Giga Firmware
- * 
+ *
  * Receives commands from Raspberry Pi via USB Serial
  * Controls 2 stepper motors (powering the assembly line) and 4 relays
- * 
+ *
  * Hardware Requirements:
  * - Arduino Giga
  * - 2 Stepper motor drivers (e.g., A4988, DRV8825, TMC2208)
  * - 4 Relays (or relay modules)
- * 
+ *
  * Pin Configuration for Arduino Giga:
  * Motor 1: STEP=2, DIR=3
  * Motor 2: STEP=5, DIR=6
- * 
+ *
  * Relay 1: Pin A0
  * Relay 2: Pin A1
  * Relay 3: Pin A2
  * Relay 4: Pin A3
- * 
+ *
  * Note: Adjust pin numbers based on your hardware configuration
  * Note: ENABLE pins not used - configure drivers to be always enabled
- * 
+ *
  * Motor commands (motor_id 1-2) are received from the control system
  * and control the 2 stepper motors that power the assembly line.
  */
+
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 // Motor pin definitions (2 stepper motors) - can be reconfigured via serial
 // Format: {STEP_PIN, DIR_PIN}
@@ -46,7 +51,6 @@ unsigned long lastPotReportTime = 0;
 unsigned long lastMotorStatusTime = 0;
 
 // Relay logic: typical boards are active-LOW (LOW = relay ON, HIGH = relay OFF).
-// If your relays turn ON at power-up, try swapping: set RELAY_OFF_LEVEL to LOW and RELAY_ON_LEVEL to HIGH.
 #define RELAY_OFF_LEVEL HIGH
 #define RELAY_ON_LEVEL  LOW
 
@@ -63,79 +67,234 @@ int numCustomPins = 0;
 
 // Motor state structure
 struct MotorState {
-  long steps_remaining;      // Steps left to move (can be negative)
-  unsigned long step_interval; // Microseconds between steps (calculated from speed)
-  unsigned long last_step_time; // Last time a step was taken
-  bool is_moving;            // Whether motor is currently moving
-  bool direction;            // Current direction (true = forward, false = backward)
+  long steps_remaining;
+  unsigned long step_interval;
+  unsigned long last_step_time;
+  bool is_moving;
+  bool direction;
 };
 
-// Motor states array (2 stepper motors)
 MotorState motors[2];
 
-// Motor speeds (steps per second) - default values
 float motor_speeds[2] = {100.0, 100.0};
 
-// Per-motor direction inversion (flip DIR pin logic when true)
 bool motor_invert_direction[2] = {false, false};
 
-// Relay states
 bool relay_states[4] = {false, false, false, false};
 
-// Serial communication
 #define SERIAL_BUFFER_MAX 512
 char serialBuffer[SERIAL_BUFFER_MAX];
 size_t serialBufferIndex = 0;
 
-// Enable or disable verbose debug prints over Serial
+// Max bytes read toward one line per loop() — keeps motion/telemetry fair
+#define SERIAL_READ_BUDGET 96
+
 #define DEBUG_SERIAL 0
 
-// Minimum step interval in microseconds (for maximum speed protection).
-// With MIN_STEP_INTERVAL = 200 us, the theoretical max speed is 5,000 steps/sec.
 const unsigned long MIN_STEP_INTERVAL = 200;
 
+// Catch-up stepping (per motor per loop)
+#define MAX_STEPS_PER_MOTOR_LOOP 24
+// If we fall behind more than this many step intervals, snap schedule to avoid a huge burst
+#define MAX_STEP_LAG_INTERVALS 8
+
+// Reject clearly invalid configured pins (board-dependent; Giga uses many numbers)
+#define PIN_NUMBER_MAX 255
+
+// TX headroom before emitting telemetry (skip cycle if buffer is tight)
+#define SERIAL_TX_HEADROOM_TELEM 128
+#define SERIAL_TX_HEADROOM_VERBOSE 48
+
+// Output line buffer for JSON telemetry
+#define JSON_LINE_BUF 192
+char jsonLineBuf[JSON_LINE_BUF];
+
+void readSerialCommands(void);
+void processCommandBuf(char* command);
+void processEStopCommand(void);
+void processConfigCommandBuf(char* command);
+void processMotorCommandBuf(char* command);
+void processRelayCommandBuf(char* command);
+void updateMotors(void);
+void stepMotor(int motor_index);
+unsigned long calculateStepInterval(float speed_steps_per_sec);
+
+static void trimBufferInPlace(char* s) {
+  if (!s || !*s) return;
+  char* p = s;
+  while (*p && isspace((unsigned char)*p)) p++;
+  if (p != s) {
+    memmove(s, p, strlen(p) + 1);
+  }
+  size_t L = strlen(s);
+  while (L > 0 && isspace((unsigned char)s[L - 1])) L--;
+  s[L] = '\0';
+}
+
+static bool serialCanWrite(int minFree) {
+  int n = Serial.availableForWrite();
+  if (n < 0) return true;
+  return n >= minFree;
+}
+
+static void serialPrintLnPriority(const char* msg) {
+  if (serialCanWrite(8)) {
+    Serial.println(msg);
+  }
+}
+
+// Find "\"key\":" then first non-space after colon
+static const char* jsonValuePtr(const char* json, const char* key) {
+  if (!json || !key) return nullptr;
+  char pattern[40];
+  snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+  const char* p = strstr(json, pattern);
+  if (!p) return nullptr;
+  p += strlen(pattern);
+  while (*p == ' ' || *p == '\t') p++;
+  return p;
+}
+
+static int extractIntJson(const char* json, const char* key) {
+  const char* p = jsonValuePtr(json, key);
+  if (!p) return 0;
+  return (int)strtol(p, nullptr, 10);
+}
+
+static long extractLongJson(const char* json, const char* key) {
+  const char* p = jsonValuePtr(json, key);
+  if (!p) return 0;
+  return strtol(p, nullptr, 10);
+}
+
+static float extractFloatJson(const char* json, const char* key) {
+  const char* p = jsonValuePtr(json, key);
+  if (!p) return 0.0f;
+  return strtof(p, nullptr);
+}
+
+// Copy quoted string value at p (p must point to opening ")
+static int extractQuotedStringAt(const char* p, char* out, size_t outSz) {
+  if (!p || *p != '"' || !out || outSz == 0) return -1;
+  p++;
+  size_t i = 0;
+  while (*p && *p != '"' && i < outSz - 1) {
+    out[i++] = *p++;
+  }
+  out[i] = '\0';
+  if (*p != '"') {
+    out[0] = '\0';
+    return -1;
+  }
+  return (int)i;
+}
+
+static int extractStringJson(const char* json, const char* key, char* out, size_t outSz) {
+  const char* p = jsonValuePtr(json, key);
+  if (!p || *p != '"') return -1;
+  return extractQuotedStringAt(p, out, outSz);
+}
+
+static bool jsonHasLiteral(const char* json, const char* lit) {
+  return json && strstr(json, lit) != nullptr;
+}
+
+static bool pinsValidMotor(int stepPin, int dirPin) {
+  if (stepPin <= 0 || dirPin <= 0) return false;
+  if (stepPin > PIN_NUMBER_MAX || dirPin > PIN_NUMBER_MAX) return false;
+  if (stepPin == dirPin) return false;
+  return true;
+}
+
+static bool pinValidGeneral(int pin) {
+  if (pin < 0 || pin > PIN_NUMBER_MAX) return false;
+  return true;
+}
+
+// Find "\"id\":<n>" or "\"id\": <n>" in [start,end), ensuring it is not id 10/12/etc.
+static const char* findIdInArray(const char* start, const char* end, int id) {
+  if (!start || !end || start >= end) return nullptr;
+  char pat[24];
+  snprintf(pat, sizeof(pat), "\"id\":%d", id);
+  const char* p = start;
+  while (p < end && (p = strstr(p, pat)) != nullptr) {
+    if (p >= end) return nullptr;
+    const char* after = p + strlen(pat);
+    if (after < end && isdigit((unsigned char)*after)) {
+      p++;
+      continue;
+    }
+    return p;
+  }
+  snprintf(pat, sizeof(pat), "\"id\": %d", id);
+  p = start;
+  while (p < end && (p = strstr(p, pat)) != nullptr) {
+    if (p >= end) return nullptr;
+    const char* after = p + strlen(pat);
+    if (after < end && isdigit((unsigned char)*after)) {
+      p++;
+      continue;
+    }
+    return p;
+  }
+  return nullptr;
+}
+
+// Find last '{' at or before pos within [start, pos]
+static const char* findObjectStart(const char* start, const char* pos) {
+  const char* p = pos;
+  while (p >= start) {
+    if (*p == '{') return p;
+    p--;
+  }
+  return nullptr;
+}
+
+// Pointer range [objStart, objEnd] inclusive end at closing brace
+static bool motorObjHasInvertTrue(const char* objStart, const char* objEnd) {
+  if (!objStart || !objEnd || objEnd < objStart) return false;
+  size_t n = (size_t)(objEnd - objStart + 1);
+  if (n >= SERIAL_BUFFER_MAX) n = SERIAL_BUFFER_MAX - 1;
+  char scratch[128];
+  if (n >= sizeof(scratch)) n = sizeof(scratch) - 1;
+  memcpy(scratch, objStart, n);
+  scratch[n] = '\0';
+  return strstr(scratch, "\"invert_direction\":true") != nullptr
+    || strstr(scratch, "\"invert_direction\": true") != nullptr;
+}
+
 void setup() {
-  // Initialize serial communication
   Serial.begin(115200);
-  // Do NOT block on while(!Serial) - when the Pi opens the port we must already be in loop()
-  // so we can process commands. Wait at most 3 seconds for Serial (e.g. for serial monitor).
   unsigned long serialWaitStart = millis();
   while (!Serial && (millis() - serialWaitStart < 3000)) {
-    ;
+    delay(1);
   }
-  delay(500); // Brief stabilization
+  delay(200);
+
   Serial.println("Arduino Giga Assembly Line Control Ready");
   Serial.println("Configuration: 2 stepper motors, 4 relays");
-  
-  // Initialize stepper motors (2 motors powering the assembly line)
+
   for (int i = 0; i < 2; i++) {
-    // Set pins as outputs
-    pinMode(MOTOR_PINS[i][0], OUTPUT); // STEP
-    pinMode(MOTOR_PINS[i][1], OUTPUT); // DIR
-    
-    // Initialize pins
-    digitalWrite(MOTOR_PINS[i][0], LOW); // STEP starts LOW
-    digitalWrite(MOTOR_PINS[i][1], LOW); // DIR starts LOW
-    
-    // Initialize motor state
+    pinMode(MOTOR_PINS[i][0], OUTPUT);
+    pinMode(MOTOR_PINS[i][1], OUTPUT);
+    digitalWrite(MOTOR_PINS[i][0], LOW);
+    digitalWrite(MOTOR_PINS[i][1], LOW);
+
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
     motors[i].direction = true;
     motors[i].last_step_time = 0;
     motors[i].step_interval = calculateStepInterval(motor_speeds[i]);
   }
-  
-  // Initialize relay pins to OFF as early as possible (avoids brief on-state on some boards)
+
   for (int i = 0; i < 4; i++) {
     pinMode(RELAY_PINS[i], OUTPUT);
     digitalWrite(RELAY_PINS[i], RELAY_OFF_LEVEL);
     relay_states[i] = false;
   }
-  
-  // Potentiometer for variable motor speed (optional)
+
   pinMode(POT_PIN, INPUT);
-  
-  // Initialize custom pins array
+
   for (int i = 0; i < MAX_CUSTOM_PINS; i++) {
     customPins[i].name[0] = '\0';
     customPins[i].pin = -1;
@@ -143,584 +302,497 @@ void setup() {
     customPins[i].configured = false;
   }
   numCustomPins = 0;
-  
-  // Setup built-in LED for status indication
+
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH); // LED on = ready
-  
-  // Clear serial buffer
+  digitalWrite(LED_BUILTIN, HIGH);
+
   serialBufferIndex = 0;
-  
+
   Serial.println("Initialization complete");
   Serial.println("Waiting for commands...");
 }
 
 void loop() {
-  // Read serial commands (non-blocking)
-  readSerialCommands();
-  
-  // Update all motors (non-blocking)
   updateMotors();
-  
-  // Report potentiometer value periodically for variable motor speed
+  readSerialCommands();
+
   unsigned long now = millis();
+
   if (now - lastPotReportTime >= POT_REPORT_INTERVAL_MS) {
     lastPotReportTime = now;
-    int val = analogRead(POT_PIN);
-    Serial.print("{\"type\":\"analog\",\"pin\":\"pot\",\"value\":");
-    Serial.print(val);
-    Serial.println("}");
+    if (serialCanWrite(SERIAL_TX_HEADROOM_TELEM)) {
+      int val = analogRead(POT_PIN);
+      int n = snprintf(jsonLineBuf, sizeof(jsonLineBuf),
+                       "{\"type\":\"analog\",\"pin\":\"pot\",\"value\":%d}\n", val);
+      if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
+        Serial.write((const uint8_t*)jsonLineBuf, (size_t)n);
+      }
+    }
   }
 
-  // Report motor status (steps_remaining, speed, is_moving) so host has authoritative values
   bool anyMoving = motors[0].is_moving || motors[1].is_moving;
   unsigned long statusInterval = anyMoving ? MOTOR_STATUS_INTERVAL_MS : MOTOR_STATUS_IDLE_INTERVAL_MS;
   if (now - lastMotorStatusTime >= statusInterval) {
     lastMotorStatusTime = now;
-    for (int i = 0; i < 2; i++) {
-      Serial.print("{\"type\":\"motor_status\",\"motor_id\":");
-      Serial.print(i + 1);
-      Serial.print(",\"steps_remaining\":");
-      Serial.print(motors[i].steps_remaining);
-      Serial.print(",\"speed\":");
-      Serial.print(motor_speeds[i]);
-      Serial.print(",\"is_moving\":");
-      Serial.print(motors[i].is_moving ? "true" : "false");
-      Serial.println("}");
+    if (serialCanWrite(SERIAL_TX_HEADROOM_TELEM)) {
+      for (int i = 0; i < 2; i++) {
+        Serial.print("{\"type\":\"motor_status\",\"motor_id\":");
+        Serial.print(i + 1);
+        Serial.print(",\"steps_remaining\":");
+        Serial.print(motors[i].steps_remaining);
+        Serial.print(",\"speed\":");
+        Serial.print(motor_speeds[i]);
+        Serial.print(",\"is_moving\":");
+        Serial.print(motors[i].is_moving ? "true" : "false");
+        Serial.println("}");
+      }
     }
   }
 }
 
 void readSerialCommands() {
-  while (Serial.available() > 0) {
-    char inChar = Serial.read();
-    
+  int budget = SERIAL_READ_BUDGET;
+  while (Serial.available() > 0 && budget-- > 0) {
+    char inChar = (char)Serial.read();
+
     if (inChar == '\n' || inChar == '\r') {
-      // Process complete command
       if (serialBufferIndex > 0) {
         serialBuffer[serialBufferIndex] = '\0';
-        processCommand(String(serialBuffer));
-      }
-      serialBufferIndex = 0;
-    } else {
-      if (serialBufferIndex < (SERIAL_BUFFER_MAX - 1)) {
-        serialBuffer[serialBufferIndex++] = inChar;
-      }
-      // If buffer overflows, discard and reset to avoid memory exhaustion / hang
-      else {
+        processCommandBuf(serialBuffer);
         serialBufferIndex = 0;
-        // Discard rest of line so we don't start mid-command
-        while (Serial.available() > 0) {
-          char c = Serial.read();
-          if (c == '\n' || c == '\r') break;
-        }
       }
+      return;
+    }
+
+    if (serialBufferIndex < (SERIAL_BUFFER_MAX - 1)) {
+      serialBuffer[serialBufferIndex++] = inChar;
+    } else {
+      serialBufferIndex = 0;
+      while (Serial.available() > 0 && budget-- > 0) {
+        char c = (char)Serial.read();
+        if (c == '\n' || c == '\r') return;
+      }
+      return;
     }
   }
 }
 
-void processCommand(String command) {
-  // Parse JSON-like command
-  // Expected format: {"type":"motor","motor_id":1,"steps":100,"speed":50.0}
-  // or with spaces: {"type": "motor", "motor_id": 1, "steps": 100, "speed": 50.0}
-  
-  command.trim();
-  
-  // Debug: Echo received command (optional)
+void processCommandBuf(char* command) {
+  trimBufferInPlace(command);
+  if (!command[0]) return;
+
 #if DEBUG_SERIAL
-  Serial.print("Received: ");
-  Serial.println(command);
+  if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    Serial.print("Received: ");
+    Serial.println(command);
+  }
 #endif
-  
-  // Check if it's an E-STOP command (highest priority)
-  if (command.indexOf("\"type\":\"estop\"") >= 0 || command.indexOf("\"type\": \"estop\"") >= 0) {
+
+  if (strstr(command, "\"type\":\"estop\"") || strstr(command, "\"type\": \"estop\"")) {
     processEStopCommand();
-  }
-  // Check if it's a config command (pin configuration)
-  else if (command.indexOf("\"type\":\"config\"") >= 0 || command.indexOf("\"type\": \"config\"") >= 0) {
-    processConfigCommand(command);
-  }
-  // Check if it's a motor command (handle both with and without spaces)
-  else if (command.indexOf("\"type\":\"motor\"") >= 0 || command.indexOf("\"type\": \"motor\"") >= 0) {
-    processMotorCommand(command);
-  }
-  // Check if it's a relay command (handle both with and without spaces)
-  else if (command.indexOf("\"type\":\"relay\"") >= 0 || command.indexOf("\"type\": \"relay\"") >= 0) {
-    processRelayCommand(command);
-  }
-  else {
-    Serial.println("ERROR: Unknown command type");
+  } else if (strstr(command, "\"type\":\"config\"") || strstr(command, "\"type\": \"config\"")) {
+    processConfigCommandBuf(command);
+  } else if (strstr(command, "\"type\":\"motor\"") || strstr(command, "\"type\": \"motor\"")) {
+    processMotorCommandBuf(command);
+  } else if (strstr(command, "\"type\":\"relay\"") || strstr(command, "\"type\": \"relay\"")) {
+    processRelayCommandBuf(command);
+  } else {
+    serialPrintLnPriority("ERROR: Unknown command type");
   }
 }
 
 void processEStopCommand() {
-  Serial.println("E-STOP: Emergency stop activated!");
-  
-  // Stop all motors immediately
+  serialPrintLnPriority("E-STOP: Emergency stop activated!");
+
   for (int i = 0; i < 2; i++) {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
   }
-  
-  // Turn off all relays
+
   for (int i = 0; i < 4; i++) {
     relay_states[i] = false;
     digitalWrite(RELAY_PINS[i], RELAY_OFF_LEVEL);
   }
-  
-  // Visual feedback - set LED to LOW to indicate E-STOP (non-blocking)
+
   digitalWrite(LED_BUILTIN, LOW);
-  
-  Serial.println("E-STOP: All motors stopped, all relays off");
+
+  serialPrintLnPriority("E-STOP: All motors stopped, all relays off");
 }
 
-void processConfigCommand(String command) {
-  Serial.println("CONFIG: Processing pin configuration...");
-  
-  // Stop all motors before reconfiguring pins
+void processConfigCommandBuf(char* command) {
+  serialPrintLnPriority("CONFIG: Processing pin configuration...");
+
   for (int i = 0; i < 2; i++) {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
     digitalWrite(MOTOR_PINS[i][0], LOW);
   }
-  
-  // Parse motor configuration
-  // Format: "motors":[{"id":1,"step_pin":2,"dir_pin":3},{"id":2,"step_pin":5,"dir_pin":6}]
-  int motorsIndex = command.indexOf("\"motors\"");
-  if (motorsIndex >= 0) {
-    // Find the array start
-    int arrayStart = command.indexOf('[', motorsIndex);
-    int arrayEnd = command.indexOf(']', arrayStart);
-    if (arrayStart >= 0 && arrayEnd > arrayStart) {
-      String motorsArray = command.substring(arrayStart, arrayEnd + 1);
-      
-      // Parse each motor
+
+  const char* motorsKey = strstr(command, "\"motors\"");
+  if (motorsKey) {
+    const char* arrayStart = strchr(motorsKey, '[');
+    const char* arrayEnd = arrayStart ? strchr(arrayStart, ']') : nullptr;
+    if (arrayStart && arrayEnd && arrayEnd > arrayStart) {
       for (int motorId = 1; motorId <= 2; motorId++) {
-        // Find this motor's config
-        String idSearch = "\"id\":" + String(motorId);
-        String idSearchSpace = "\"id\": " + String(motorId);
-        int motorConfigStart = motorsArray.indexOf(idSearch);
-        if (motorConfigStart < 0) {
-          motorConfigStart = motorsArray.indexOf(idSearchSpace);
-        }
-        
-        if (motorConfigStart >= 0) {
-          // Find the object containing this motor
-          int objStart = motorsArray.lastIndexOf('{', motorConfigStart);
-          int objEnd = motorsArray.indexOf('}', motorConfigStart);
-          if (objStart >= 0 && objEnd > objStart) {
-            String motorConfig = motorsArray.substring(objStart, objEnd + 1);
-            
-            int stepPin = extractInt(motorConfig, "step_pin");
-            int dirPin = extractInt(motorConfig, "dir_pin");
-            
-            if (stepPin > 0 && dirPin > 0) {
-              int motorIndex = motorId - 1;
-              
-              // Update pin configuration
-              MOTOR_PINS[motorIndex][0] = stepPin;
-              MOTOR_PINS[motorIndex][1] = dirPin;
-              
-              // Parse invert_direction (optional, default false)
-              motor_invert_direction[motorIndex] = (motorConfig.indexOf("\"invert_direction\":true") >= 0 || motorConfig.indexOf("\"invert_direction\": true") >= 0);
-              
-              // Reinitialize pins
-              pinMode(MOTOR_PINS[motorIndex][0], OUTPUT);
-              pinMode(MOTOR_PINS[motorIndex][1], OUTPUT);
-              digitalWrite(MOTOR_PINS[motorIndex][0], LOW);
-              digitalWrite(MOTOR_PINS[motorIndex][1], LOW);
-              
-              // Update step interval
-              motors[motorIndex].step_interval = calculateStepInterval(motor_speeds[motorIndex]);
-              
-              Serial.print("CONFIG: Motor ");
-              Serial.print(motorId);
-              Serial.print(" -> STEP=");
-              Serial.print(stepPin);
-              Serial.print(", DIR=");
-              Serial.print(dirPin);
-              Serial.print(", invert=");
-              Serial.println(motor_invert_direction[motorIndex] ? 1 : 0);
-            }
+        const char* idPos = findIdInArray(arrayStart, arrayEnd, motorId);
+        if (!idPos || idPos >= arrayEnd) continue;
+
+        const char* objStart = findObjectStart(arrayStart, idPos);
+        if (!objStart || objStart >= idPos) continue;
+        const char* objEnd = strchr(idPos, '}');
+        if (!objEnd || objEnd > arrayEnd) continue;
+
+        size_t objLen = (size_t)(objEnd - objStart + 1);
+        if (objLen >= sizeof(jsonLineBuf)) objLen = sizeof(jsonLineBuf) - 1;
+        memcpy(jsonLineBuf, objStart, objLen);
+        jsonLineBuf[objLen] = '\0';
+
+        int stepPin = extractIntJson(jsonLineBuf, "step_pin");
+        int dirPin = extractIntJson(jsonLineBuf, "dir_pin");
+
+        if (!pinsValidMotor(stepPin, dirPin)) {
+          if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+            Serial.print("ERROR: Invalid motor pins step=");
+            Serial.print(stepPin);
+            Serial.print(" dir=");
+            Serial.println(dirPin);
           }
+          continue;
+        }
+
+        int motorIndex = motorId - 1;
+        MOTOR_PINS[motorIndex][0] = stepPin;
+        MOTOR_PINS[motorIndex][1] = dirPin;
+        motor_invert_direction[motorIndex] = motorObjHasInvertTrue(objStart, objEnd);
+
+        pinMode(MOTOR_PINS[motorIndex][0], OUTPUT);
+        pinMode(MOTOR_PINS[motorIndex][1], OUTPUT);
+        digitalWrite(MOTOR_PINS[motorIndex][0], LOW);
+        digitalWrite(MOTOR_PINS[motorIndex][1], LOW);
+        motors[motorIndex].step_interval = calculateStepInterval(motor_speeds[motorIndex]);
+
+        if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+          Serial.print("CONFIG: Motor ");
+          Serial.print(motorId);
+          Serial.print(" -> STEP=");
+          Serial.print(stepPin);
+          Serial.print(", DIR=");
+          Serial.print(dirPin);
+          Serial.print(", invert=");
+          Serial.println(motor_invert_direction[motorIndex] ? 1 : 0);
         }
       }
     }
   }
-  
-  // Parse relay configuration
-  // Format: "relays":[{"id":1,"pin":54},{"id":2,"pin":55},...]
-  int relaysIndex = command.indexOf("\"relays\"");
-  if (relaysIndex >= 0) {
-    int arrayStart = command.indexOf('[', relaysIndex);
-    int arrayEnd = command.indexOf(']', arrayStart);
-    if (arrayStart >= 0 && arrayEnd > arrayStart) {
-      String relaysArray = command.substring(arrayStart, arrayEnd + 1);
-      
+
+  const char* relaysKey = strstr(command, "\"relays\"");
+  if (relaysKey) {
+    const char* arrayStart = strchr(relaysKey, '[');
+    const char* arrayEnd = arrayStart ? strchr(arrayStart, ']') : nullptr;
+    if (arrayStart && arrayEnd && arrayEnd > arrayStart) {
       for (int relayId = 1; relayId <= 4; relayId++) {
-        String idSearch = "\"id\":" + String(relayId);
-        String idSearchSpace = "\"id\": " + String(relayId);
-        int relayConfigStart = relaysArray.indexOf(idSearch);
-        if (relayConfigStart < 0) {
-          relayConfigStart = relaysArray.indexOf(idSearchSpace);
-        }
-        
-        if (relayConfigStart >= 0) {
-          int objStart = relaysArray.lastIndexOf('{', relayConfigStart);
-          int objEnd = relaysArray.indexOf('}', relayConfigStart);
-          if (objStart >= 0 && objEnd > objStart) {
-            String relayConfig = relaysArray.substring(objStart, objEnd + 1);
-            
-            int pin = extractInt(relayConfig, "pin");
-            if (pin >= 0) {
-              int relayIndex = relayId - 1;
-              
-              // Update pin configuration
-              RELAY_PINS[relayIndex] = pin;
-              
-              // Reinitialize pin
-              pinMode(RELAY_PINS[relayIndex], OUTPUT);
-              digitalWrite(RELAY_PINS[relayIndex], relay_states[relayIndex] ? RELAY_ON_LEVEL : RELAY_OFF_LEVEL);
-              
-              Serial.print("CONFIG: Relay ");
-              Serial.print(relayId);
-              Serial.print(" -> Pin=");
-              Serial.println(pin);
-            }
+        const char* idPos = findIdInArray(arrayStart, arrayEnd, relayId);
+        if (!idPos || idPos >= arrayEnd) continue;
+
+        const char* objStart = findObjectStart(arrayStart, idPos);
+        if (!objStart || objStart >= idPos) continue;
+        const char* objEnd = strchr(idPos, '}');
+        if (!objEnd || objEnd > arrayEnd) continue;
+
+        size_t objLen = (size_t)(objEnd - objStart + 1);
+        if (objLen >= sizeof(jsonLineBuf)) objLen = sizeof(jsonLineBuf) - 1;
+        memcpy(jsonLineBuf, objStart, objLen);
+        jsonLineBuf[objLen] = '\0';
+
+        int pin = extractIntJson(jsonLineBuf, "pin");
+        if (!pinValidGeneral(pin)) {
+          if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+            Serial.print("ERROR: Invalid relay pin ");
+            Serial.println(pin);
           }
+          continue;
+        }
+
+        int relayIndex = relayId - 1;
+        RELAY_PINS[relayIndex] = pin;
+        pinMode(RELAY_PINS[relayIndex], OUTPUT);
+        digitalWrite(RELAY_PINS[relayIndex], relay_states[relayIndex] ? RELAY_ON_LEVEL : RELAY_OFF_LEVEL);
+
+        if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+          Serial.print("CONFIG: Relay ");
+          Serial.print(relayId);
+          Serial.print(" -> Pin=");
+          Serial.println(pin);
         }
       }
     }
   }
-  
-  // Parse custom pins configuration
-  // Format: "custom":[{"name":"sensor1","pin":10,"mode":"input"},...]
-  int customIndex = command.indexOf("\"custom\"");
-  if (customIndex >= 0) {
-    int arrayStart = command.indexOf('[', customIndex);
-    int arrayEnd = command.indexOf(']', arrayStart);
-    if (arrayStart >= 0 && arrayEnd > arrayStart) {
-      String customArray = command.substring(arrayStart + 1, arrayEnd);
-      
-      // Reset custom pins
+
+  const char* customKey = strstr(command, "\"custom\"");
+  if (customKey) {
+    const char* arrayStart = strchr(customKey, '[');
+    const char* arrayEnd = arrayStart ? strchr(arrayStart, ']') : nullptr;
+    if (arrayStart && arrayEnd && arrayEnd > arrayStart) {
+      const char* innerBegin = arrayStart + 1;
       numCustomPins = 0;
       for (int i = 0; i < MAX_CUSTOM_PINS; i++) {
         customPins[i].configured = false;
       }
-      
-      // Parse each custom pin
-      int searchStart = 0;
-      while (numCustomPins < MAX_CUSTOM_PINS) {
-        int objStart = customArray.indexOf('{', searchStart);
-        if (objStart < 0) break;
-        
-        int objEnd = customArray.indexOf('}', objStart);
-        if (objEnd < 0) break;
-        
-        String pinConfig = customArray.substring(objStart, objEnd + 1);
-        searchStart = objEnd + 1;
-        
-        String name = extractString(pinConfig, "name");
-        int pin = extractInt(pinConfig, "pin");
-        String modeStr = extractString(pinConfig, "mode");
-        
-        if (name.length() > 0 && pin >= 0) {
-          // Store custom pin
-          name.toCharArray(customPins[numCustomPins].name, 32);
-          customPins[numCustomPins].pin = pin;
-          
-          // Parse mode
-          if (modeStr == "output") {
-            customPins[numCustomPins].mode = 1;
-            pinMode(pin, OUTPUT);
-            digitalWrite(pin, LOW);
-          } else if (modeStr == "input_pullup") {
-            customPins[numCustomPins].mode = 2;
-            pinMode(pin, INPUT_PULLUP);
-          } else {
-            customPins[numCustomPins].mode = 0;
-            pinMode(pin, INPUT);
-          }
-          
-          customPins[numCustomPins].configured = true;
-          
+
+      const char* scan = innerBegin;
+      while (numCustomPins < MAX_CUSTOM_PINS && scan < arrayEnd) {
+        const char* objStart = strchr(scan, '{');
+        if (!objStart || objStart >= arrayEnd) break;
+        const char* objEnd = strchr(objStart, '}');
+        if (!objEnd || objEnd > arrayEnd) break;
+
+        size_t objLen = (size_t)(objEnd - objStart + 1);
+        if (objLen >= sizeof(jsonLineBuf)) objLen = sizeof(jsonLineBuf) - 1;
+        memcpy(jsonLineBuf, objStart, objLen);
+        jsonLineBuf[objLen] = '\0';
+
+        char nameBuf[32];
+        if (extractStringJson(jsonLineBuf, "name", nameBuf, sizeof(nameBuf)) < 0) {
+          scan = objEnd + 1;
+          continue;
+        }
+
+        int pin = extractIntJson(jsonLineBuf, "pin");
+        if (!pinValidGeneral(pin)) {
+          scan = objEnd + 1;
+          continue;
+        }
+
+        char modeBuf[20];
+        if (extractStringJson(jsonLineBuf, "mode", modeBuf, sizeof(modeBuf)) < 0) {
+          modeBuf[0] = '\0';
+        }
+
+        strncpy(customPins[numCustomPins].name, nameBuf, sizeof(customPins[numCustomPins].name) - 1);
+        customPins[numCustomPins].name[sizeof(customPins[numCustomPins].name) - 1] = '\0';
+        customPins[numCustomPins].pin = pin;
+
+        if (strcmp(modeBuf, "output") == 0) {
+          customPins[numCustomPins].mode = 1;
+          pinMode(pin, OUTPUT);
+          digitalWrite(pin, LOW);
+        } else if (strcmp(modeBuf, "input_pullup") == 0) {
+          customPins[numCustomPins].mode = 2;
+          pinMode(pin, INPUT_PULLUP);
+        } else {
+          customPins[numCustomPins].mode = 0;
+          pinMode(pin, INPUT);
+        }
+
+        customPins[numCustomPins].configured = true;
+
+        if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
           Serial.print("CONFIG: Custom pin '");
-          Serial.print(name);
+          Serial.print(customPins[numCustomPins].name);
           Serial.print("' -> Pin=");
           Serial.print(pin);
           Serial.print(", Mode=");
-          Serial.println(modeStr);
-          
-          numCustomPins++;
+          Serial.println(modeBuf[0] ? modeBuf : "input");
         }
+
+        numCustomPins++;
+        scan = objEnd + 1;
       }
     }
   }
-  
-  Serial.println("CONFIG: Pin configuration applied successfully");
-  Serial.print("CONFIG: ");
-  Serial.print(numCustomPins);
-  Serial.println(" custom pins configured");
+
+  serialPrintLnPriority("CONFIG: Pin configuration applied successfully");
+  if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    Serial.print("CONFIG: ");
+    Serial.print(numCustomPins);
+    Serial.println(" custom pins configured");
+  }
 }
 
-void processMotorCommand(String command) {
-  // Extract motor_id (only 1-2 are valid, matching the control system)
-  int motor_id = extractInt(command, "motor_id");
+void processMotorCommandBuf(char* command) {
+  int motor_id = extractIntJson(command, "motor_id");
   if (motor_id < 1 || motor_id > 2) {
-    Serial.print("ERROR: Invalid motor_id: ");
-    Serial.print(motor_id);
-    Serial.println(" (valid range: 1-2)");
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.print("ERROR: Invalid motor_id: ");
+      Serial.print(motor_id);
+      Serial.println(" (valid range: 1-2)");
+    }
     return;
   }
-  
-  int motor_index = motor_id - 1; // Convert to 0-based index
-  
-  // Extract steps (using long to support maximum range)
-  long steps = extractLong(command, "steps");
-  
-  // Extract speed (if provided)
-  float speed = extractFloat(command, "speed");
+
+  int motor_index = motor_id - 1;
+
+  long steps = extractLongJson(command, "steps");
+
+  float speed = extractFloatJson(command, "speed");
   if (speed > 0) {
-    // Allow speeds up to 5,000 steps/sec (limited further by MIN_STEP_INTERVAL).
-    motor_speeds[motor_index] = constrain(speed, 1.0, 5000.0);
+    motor_speeds[motor_index] = constrain(speed, 1.0f, 5000.0f);
     motors[motor_index].step_interval = calculateStepInterval(motor_speeds[motor_index]);
   }
-  
-  // Check for explicit stop flag (stop:true in JSON forces motor to stop)
-  bool explicit_stop = (command.indexOf("\"stop\":true") >= 0 || command.indexOf("\"stop\": true") >= 0);
-  
-  // Update motor state
+
+  bool explicit_stop = jsonHasLiteral(command, "\"stop\":true") || jsonHasLiteral(command, "\"stop\": true");
+
   if (explicit_stop) {
-    // Explicit stop command - always stop the motor
     motors[motor_index].steps_remaining = 0;
     motors[motor_index].is_moving = false;
     digitalWrite(MOTOR_PINS[motor_index][0], LOW);
-    
-    Serial.print("STOP: Motor ");
-    Serial.print(motor_id);
-    Serial.println(" stopped (explicit)");
+
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.print("STOP: Motor ");
+      Serial.print(motor_id);
+      Serial.println(" stopped (explicit)");
+    }
   } else if (steps == 0) {
-    // steps=0 without explicit stop = speed-only (live) update
-    // Only motor_speeds[] and step_interval were updated above; steps_remaining and is_moving
-    // are unchanged. Safe for continuous updates (e.g. potentiometer); next step uses new interval.
-    Serial.print("SPEED UPDATE: Motor ");
-    Serial.print(motor_id);
-    Serial.print(" speed=");
-    Serial.println(motor_speeds[motor_index]);
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.print("SPEED UPDATE: Motor ");
+      Serial.print(motor_id);
+      Serial.print(" speed=");
+      Serial.println(motor_speeds[motor_index]);
+    }
   } else {
     motors[motor_index].steps_remaining += steps;
     motors[motor_index].is_moving = true;
     motors[motor_index].direction = (steps > 0);
     motors[motor_index].last_step_time = micros();
-    
-    // Set direction pin (apply invert if configured)
+
     bool effective_dir = motors[motor_index].direction ^ motor_invert_direction[motor_index];
     digitalWrite(MOTOR_PINS[motor_index][1], effective_dir ? HIGH : LOW);
-    
-    // Visual feedback - set LED HIGH when motor starts (non-blocking)
+
     digitalWrite(LED_BUILTIN, HIGH);
   }
-  
-  // Send acknowledgment
-  Serial.print("OK: Motor ");
-  Serial.print(motor_id);
-  Serial.print(" steps=");
-  Serial.print(steps);
-  Serial.print(" total_remaining=");
-  Serial.print(motors[motor_index].steps_remaining);
-  Serial.print(" speed=");
-  Serial.println(motor_speeds[motor_index]);
+
+  if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    Serial.print("OK: Motor ");
+    Serial.print(motor_id);
+    Serial.print(" steps=");
+    Serial.print(steps);
+    Serial.print(" total_remaining=");
+    Serial.print(motors[motor_index].steps_remaining);
+    Serial.print(" speed=");
+    Serial.println(motor_speeds[motor_index]);
+  }
 }
 
-void processRelayCommand(String command) {
-  // Extract relay_id
-  int relay_id = extractInt(command, "relay_id");
+static void strToLowerAscii(char* s) {
+  for (; *s; s++) {
+    if (*s >= 'A' && *s <= 'Z') *s = (char)(*s - 'A' + 'a');
+  }
+}
+
+void processRelayCommandBuf(char* command) {
+  int relay_id = extractIntJson(command, "relay_id");
   if (relay_id < 1 || relay_id > 4) {
-    Serial.print("ERROR: Invalid relay_id: ");
-    Serial.println(relay_id);
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.print("ERROR: Invalid relay_id: ");
+      Serial.println(relay_id);
+    }
     return;
   }
-  
-  int relay_index = relay_id - 1; // Convert to 0-based index
-  
-  // Extract state
-  String state = extractString(command, "state");
-  state.toLowerCase();
-  
-  if (state == "on") {
+
+  int relay_index = relay_id - 1;
+
+  char stateBuf[12];
+  if (extractStringJson(command, "state", stateBuf, sizeof(stateBuf)) < 0) {
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.println("ERROR: Missing relay state");
+    }
+    return;
+  }
+  strToLowerAscii(stateBuf);
+
+  if (strcmp(stateBuf, "on") == 0) {
     digitalWrite(RELAY_PINS[relay_index], RELAY_ON_LEVEL);
     relay_states[relay_index] = true;
-    Serial.print("OK: Relay ");
-    Serial.print(relay_id);
-    Serial.println(" ON");
-  } else if (state == "off") {
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.print("OK: Relay ");
+      Serial.print(relay_id);
+      Serial.println(" ON");
+    }
+  } else if (strcmp(stateBuf, "off") == 0) {
     digitalWrite(RELAY_PINS[relay_index], RELAY_OFF_LEVEL);
     relay_states[relay_index] = false;
-    Serial.print("OK: Relay ");
-    Serial.print(relay_id);
-    Serial.println(" OFF");
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.print("OK: Relay ");
+      Serial.print(relay_id);
+      Serial.println(" OFF");
+    }
   } else {
-    Serial.print("ERROR: Invalid relay state: ");
-    Serial.println(state);
+    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+      Serial.print("ERROR: Invalid relay state: ");
+      Serial.println(stateBuf);
+    }
   }
 }
 
 void updateMotors() {
-  unsigned long current_time = micros();
-  
-  // Update stepper motors (2 motors powering the assembly line)
-  // Each motor runs independently, enabling true parallel execution
   for (int i = 0; i < 2; i++) {
-    if (motors[i].is_moving && motors[i].steps_remaining != 0) {
-      // Update direction pin based on current steps_remaining sign
-      // This ensures direction is correct even if new commands change the sign
+    if (!motors[i].is_moving || motors[i].steps_remaining == 0) {
+      continue;
+    }
+
+    int stepsThisLoop = 0;
+    while (stepsThisLoop < MAX_STEPS_PER_MOTOR_LOOP
+           && motors[i].is_moving
+           && motors[i].steps_remaining != 0) {
+      unsigned long current_time = micros();
+
+      unsigned long overdue = current_time - motors[i].last_step_time;
+      unsigned long maxLag = motors[i].step_interval * (unsigned long)MAX_STEP_LAG_INTERVALS;
+      if (overdue > maxLag) {
+        motors[i].last_step_time = current_time - maxLag;
+      }
+
+      if ((micros() - motors[i].last_step_time) < motors[i].step_interval) {
+        break;
+      }
+
+      current_time = micros();
+
       bool new_direction = (motors[i].steps_remaining > 0);
       if (motors[i].direction != new_direction) {
         motors[i].direction = new_direction;
         bool effective_dir = motors[i].direction ^ motor_invert_direction[i];
         digitalWrite(MOTOR_PINS[i][1], effective_dir ? HIGH : LOW);
       }
-      
-      // Check if it's time to take a step
-      if ((current_time - motors[i].last_step_time) >= motors[i].step_interval) {
-        // Take a step
-        stepMotor(i);
-        
-        // Update state
-        if (motors[i].steps_remaining > 0) {
-          motors[i].steps_remaining--;
-        } else {
-          motors[i].steps_remaining++;
-        }
-        
-        motors[i].last_step_time = current_time;
-        
-        // Check if motor has finished
-        if (motors[i].steps_remaining == 0) {
-          motors[i].is_moving = false;
-          // Keep STEP pin LOW when not moving
-          digitalWrite(MOTOR_PINS[i][0], LOW);
-        }
+
+      stepMotor(i);
+
+      if (motors[i].steps_remaining > 0) {
+        motors[i].steps_remaining--;
+      } else {
+        motors[i].steps_remaining++;
       }
+
+      motors[i].last_step_time += motors[i].step_interval;
+
+      if (motors[i].steps_remaining == 0) {
+        motors[i].is_moving = false;
+        digitalWrite(MOTOR_PINS[i][0], LOW);
+      }
+
+      stepsThisLoop++;
     }
   }
 }
 
-// Minimum step pulse width in microseconds. Most stepper drivers require 1–2 µs.
-// Keep this as small as reliably supported by your drivers.
 #define STEP_PULSE_WIDTH_US 2
 
 void stepMotor(int motor_index) {
-  // Generate a step pulse for a stepper motor (rising edge on STEP pin)
   digitalWrite(MOTOR_PINS[motor_index][0], HIGH);
   delayMicroseconds(STEP_PULSE_WIDTH_US);
   digitalWrite(MOTOR_PINS[motor_index][0], LOW);
 }
 
 unsigned long calculateStepInterval(float speed_steps_per_sec) {
-  // Convert steps per second to microseconds between steps
   if (speed_steps_per_sec <= 0) {
-    speed_steps_per_sec = 1.0; // Minimum speed
+    speed_steps_per_sec = 1.0f;
   }
-  
-  unsigned long interval = (unsigned long)(1000000.0 / speed_steps_per_sec);
-  
-  // Enforce minimum interval for safety
+
+  unsigned long interval = (unsigned long)(1000000.0f / speed_steps_per_sec);
+
   if (interval < MIN_STEP_INTERVAL) {
     interval = MIN_STEP_INTERVAL;
   }
-  
+
   return interval;
-}
-
-// Helper function to extract integer value from JSON string
-int extractInt(String json, String key) {
-  String searchKey = "\"" + key + "\":";
-  int keyIndex = json.indexOf(searchKey);
-  if (keyIndex < 0) {
-    return 0;
-  }
-  
-  int valueStart = keyIndex + searchKey.length();
-  int valueEnd = json.indexOf(',', valueStart);
-  if (valueEnd < 0) {
-    valueEnd = json.indexOf('}', valueStart);
-  }
-  if (valueEnd < 0) {
-    return 0;
-  }
-  
-  String valueStr = json.substring(valueStart, valueEnd);
-  valueStr.trim();
-  return valueStr.toInt();
-}
-
-// Helper function to extract long value from JSON string (for large step values)
-long extractLong(String json, String key) {
-  String searchKey = "\"" + key + "\":";
-  int keyIndex = json.indexOf(searchKey);
-  if (keyIndex < 0) {
-    return 0;
-  }
-  
-  int valueStart = keyIndex + searchKey.length();
-  int valueEnd = json.indexOf(',', valueStart);
-  if (valueEnd < 0) {
-    valueEnd = json.indexOf('}', valueStart);
-  }
-  if (valueEnd < 0) {
-    return 0;
-  }
-  
-  String valueStr = json.substring(valueStart, valueEnd);
-  valueStr.trim();
-  return valueStr.toInt(); // toInt() returns long on Arduino (32-bit signed integer)
-}
-
-// Helper function to extract float value from JSON string
-float extractFloat(String json, String key) {
-  String searchKey = "\"" + key + "\":";
-  int keyIndex = json.indexOf(searchKey);
-  if (keyIndex < 0) {
-    return 0.0;
-  }
-  
-  int valueStart = keyIndex + searchKey.length();
-  int valueEnd = json.indexOf(',', valueStart);
-  if (valueEnd < 0) {
-    valueEnd = json.indexOf('}', valueStart);
-  }
-  if (valueEnd < 0) {
-    return 0.0;
-  }
-  
-  String valueStr = json.substring(valueStart, valueEnd);
-  valueStr.trim();
-  return valueStr.toFloat();
-}
-
-// Helper function to extract string value from JSON string
-// Handles both "key":"value" and "key": "value" (with space after colon)
-String extractString(String json, String key) {
-  // Try without space first: "key":"value"
-  String searchKey = "\"" + key + "\":\"";
-  int keyIndex = json.indexOf(searchKey);
-  
-  // If not found, try with space: "key": "value"
-  if (keyIndex < 0) {
-    searchKey = "\"" + key + "\": \"";
-    keyIndex = json.indexOf(searchKey);
-  }
-  
-  if (keyIndex < 0) {
-    return "";
-  }
-  
-  int valueStart = keyIndex + searchKey.length();
-  int valueEnd = json.indexOf('"', valueStart);
-  if (valueEnd < 0) {
-    return "";
-  }
-  
-  return json.substring(valueStart, valueEnd);
 }
