@@ -103,6 +103,8 @@ const unsigned long MIN_STEP_INTERVAL = 200;
 
 // TX headroom before emitting telemetry (skip cycle if buffer is tight)
 #define SERIAL_TX_HEADROOM_TELEM 128
+// Short analog JSON line ~45 bytes; avoid requiring full TELEM budget so pot keeps updating
+#define SERIAL_TX_HEADROOM_ANALOG 64
 #define SERIAL_TX_HEADROOM_VERBOSE 48
 
 // Output line buffer for JSON telemetry
@@ -318,14 +320,16 @@ void loop() {
 
   unsigned long now = millis();
 
+  // Only advance the interval after a successful send so congestion does not drop samples
+  // while advancing time (host would see stuck / sparse pot values).
   if (now - lastPotReportTime >= POT_REPORT_INTERVAL_MS) {
-    lastPotReportTime = now;
-    if (serialCanWrite(SERIAL_TX_HEADROOM_TELEM)) {
+    if (serialCanWrite(SERIAL_TX_HEADROOM_ANALOG)) {
       int val = analogRead(POT_PIN);
       int n = snprintf(jsonLineBuf, sizeof(jsonLineBuf),
                        "{\"type\":\"analog\",\"pin\":\"pot\",\"value\":%d}\n", val);
       if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
         Serial.write((const uint8_t*)jsonLineBuf, (size_t)n);
+        lastPotReportTime = now;
       }
     }
   }

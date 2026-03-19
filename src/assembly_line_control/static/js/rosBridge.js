@@ -470,9 +470,12 @@ const ROSBridge = {
             messageType: 'std_msgs/Float32'
         });
         this.potentiometerSub.subscribe((msg) => {
-            this.recordTelemetry('/potentiometer/raw', String(msg.data));
-            this.lastPotRaw = msg.data;
-            this.lastPotAtMs = Date.now();
+            const v = msg && msg.data !== undefined && msg.data !== null ? Number(msg.data) : NaN;
+            this.recordTelemetry('/potentiometer/raw', Number.isFinite(v) ? String(v) : String(msg && msg.data));
+            if (Number.isFinite(v)) {
+                this.lastPotRaw = v;
+                this.lastPotAtMs = Date.now();
+            }
         });
 
         this.motorSpeedSetpointSub = new ROSLIB.Topic({
@@ -481,8 +484,11 @@ const ROSBridge = {
             messageType: 'std_msgs/Float32'
         });
         this.motorSpeedSetpointSub.subscribe((msg) => {
-            this.recordTelemetry('/motor_speed/setpoint', String(msg.data));
-            this.motorSpeedSetpoint = msg.data;
+            const v = msg && msg.data !== undefined && msg.data !== null ? Number(msg.data) : NaN;
+            this.recordTelemetry('/motor_speed/setpoint', Number.isFinite(v) ? String(v) : String(msg && msg.data));
+            if (Number.isFinite(v)) {
+                this.motorSpeedSetpoint = v;
+            }
         });
 
         this.motor1SpeedEchoSub = new ROSLIB.Topic({

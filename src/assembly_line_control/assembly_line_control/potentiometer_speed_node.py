@@ -14,6 +14,8 @@ startup until the user subscribes to the setpoint topic in the UI.
 Smoothing (EMA) and a speed deadband reduce jitter from ADC noise.
 """
 
+import time
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
@@ -149,7 +151,6 @@ class PotentiometerSpeedNode(Node):
         self.get_logger().debug(f'Baseline speed set to {self.baseline_speed:.1f} sps from motor{motor_id}/speed')
 
     def pot_callback(self, msg):
-        import time
         raw = max(0.0, min(1023.0, float(msg.data)))
         if self.smoothed_raw is None:
             self.smoothed_raw = raw
@@ -178,24 +179,26 @@ class PotentiometerSpeedNode(Node):
             f'pot raw={self.smoothed_raw:.1f}, radius={radius:.3f} in, speed={speed:.1f} steps/sec'
         )
 
-        # Deadband: only publish when speed changed meaningfully (or first time)
-        if self.last_published_speed is not None and abs(speed - self.last_published_speed) < self.speed_deadband:
-            return
-        self.last_published_speed = speed
-
         now = time.time()
+        # Rate limit first: do not update last_published_speed until we actually publish,
+        # otherwise a skipped publish (too soon) makes deadband think we already emitted this speed.
         if now - self.last_publish_time < self.min_interval:
             return
-        self.last_publish_time = now
+
+        if self.last_published_speed is not None and abs(speed - self.last_published_speed) < self.speed_deadband:
+            return
 
         setpoint_msg = Float32()
-        setpoint_msg.data = speed
+        setpoint_msg.data = float(speed)
         self.setpoint_pub.publish(setpoint_msg)
 
         if self.motor1_speed_pub:
             self.motor1_speed_pub.publish(setpoint_msg)
         if self.motor2_speed_pub:
             self.motor2_speed_pub.publish(setpoint_msg)
+
+        self.last_published_speed = speed
+        self.last_publish_time = now
 
 
 def main(args=None):

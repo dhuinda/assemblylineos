@@ -418,6 +418,11 @@ class ArduinoController(Node):
                             msg_type = data.get('type')
                             if msg_type == 'analog':
                                 val = data.get('value')
+                                if isinstance(val, str):
+                                    try:
+                                        val = float(val.strip())
+                                    except (TypeError, ValueError):
+                                        val = None
                                 if isinstance(val, (int, float)):
                                     raw = max(0.0, min(1023.0, float(val)))
                                     if self._pot_smoothed_raw is None:
@@ -433,6 +438,11 @@ class ArduinoController(Node):
                                     handled = True
                             elif msg_type == 'motor_status':
                                 motor_id = data.get('motor_id')
+                                try:
+                                    if motor_id is not None:
+                                        motor_id = int(float(motor_id))
+                                except (TypeError, ValueError):
+                                    motor_id = None
                                 if motor_id in (1, 2):
                                     self._apply_arduino_motor_status(motor_id, data)
                                     handled = True
