@@ -112,6 +112,15 @@ const unsigned long MIN_STEP_INTERVAL = 200;
 #define JSON_LINE_BUF 192
 char jsonLineBuf[JSON_LINE_BUF];
 
+// Non-blocking serial TX queue: telemetry is enqueued, then drained in small chunks.
+// This avoids long Serial.print() blocking pauses that cause motor stutter.
+#define SERIAL_TX_QUEUE_SIZE 2048
+#define SERIAL_TX_DRAIN_BUDGET 96   // Max bytes written from queue per loop()
+#define SERIAL_TX_MOTOR_MIN_FREE 256  // Skip motor_status when queue is tight
+char serialTxQueue[SERIAL_TX_QUEUE_SIZE];
+size_t serialTxHead = 0;  // Next write position
+size_t serialTxTail = 0;  // Next read position
+
 void readSerialCommands(void);
 void processCommandBuf(char* command);
 void processEStopCommand(void);
@@ -121,6 +130,7 @@ void processRelayCommandBuf(char* command);
 void updateMotors(void);
 void stepMotor(int motor_index);
 unsigned long calculateStepInterval(float speed_steps_per_sec);
+void drainSerialTxQueue(void);
 
 static void trimBufferInPlace(char* s) {
   if (!s || !*s) return;
@@ -142,6 +152,50 @@ static bool serialCanWrite(int minFree) {
 
 static void serialPrintLnPriority(const char* msg) {
   Serial.println(msg);
+}
+
+static size_t serialTxUsed(void) {
+  if (serialTxHead >= serialTxTail) return serialTxHead - serialTxTail;
+  return SERIAL_TX_QUEUE_SIZE - (serialTxTail - serialTxHead);
+}
+
+static size_t serialTxFree(void) {
+  // Keep one slot empty so head == tail means "empty".
+  return (SERIAL_TX_QUEUE_SIZE - 1) - serialTxUsed();
+}
+
+static bool serialTxEnqueue(const char* data, size_t len) {
+  if (!data || len == 0) return true;
+  if (len > serialTxFree()) return false;
+  for (size_t i = 0; i < len; i++) {
+    serialTxQueue[serialTxHead] = data[i];
+    serialTxHead++;
+    if (serialTxHead >= SERIAL_TX_QUEUE_SIZE) serialTxHead = 0;
+  }
+  return true;
+}
+
+void drainSerialTxQueue(void) {
+  if (!Serial) return;
+  int canWrite = Serial.availableForWrite();
+  if (canWrite <= 0) return;
+
+  size_t budget = (size_t)canWrite;
+  if (budget > (size_t)SERIAL_TX_DRAIN_BUDGET) budget = (size_t)SERIAL_TX_DRAIN_BUDGET;
+
+  while (budget > 0 && serialTxTail != serialTxHead) {
+    size_t contiguous = (serialTxHead > serialTxTail)
+      ? (serialTxHead - serialTxTail)
+      : (SERIAL_TX_QUEUE_SIZE - serialTxTail);
+    if (contiguous > budget) contiguous = budget;
+
+    size_t written = Serial.write((const uint8_t*)&serialTxQueue[serialTxTail], contiguous);
+    if (written == 0) break;
+
+    serialTxTail += written;
+    if (serialTxTail >= SERIAL_TX_QUEUE_SIZE) serialTxTail = 0;
+    budget -= written;
+  }
 }
 
 // Find "\"key\":" then first non-space after colon
@@ -319,42 +373,44 @@ void loop() {
 
   unsigned long now = millis();
 
-  // Potentiometer reporting — runs FIRST so it isn't starved by motor_status.
-  // Uses Serial.print() (which may briefly block if the TX buffer is full but
-  // will always complete once the host drains bytes).  The old approach gated
-  // on serialCanWrite(~49) which silently dropped every write when the Giga's
-  // USB-CDC availableForWrite() returned 0 during the initial handshake or
-  // under momentary back-pressure.
+  // Potentiometer telemetry (high priority): enqueue one JSON line.
   if (now - lastPotReportTime >= POT_REPORT_INTERVAL_MS) {
     lastPotReportTime = now;
-    if (Serial) {
-      int val = analogRead(POT_PIN);
-      Serial.print("{\"type\":\"analog\",\"pin\":\"pot\",\"value\":");
-      Serial.print(val);
-      Serial.println("}");
+    int val = analogRead(POT_PIN);
+    int n = snprintf(
+      jsonLineBuf, sizeof(jsonLineBuf),
+      "{\"type\":\"analog\",\"pin\":\"pot\",\"value\":%d}\n", val
+    );
+    if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
+      (void)serialTxEnqueue(jsonLineBuf, (size_t)n);
     }
   }
 
-  // Motor status reporting — same fix: write directly via Serial.print()
-  // instead of gating on serialCanWrite() which can starve output on USB-CDC.
+  // Motor status telemetry (lower priority): skip when queue is congested.
   bool anyMoving = motors[0].is_moving || motors[1].is_moving;
   unsigned long statusInterval = anyMoving ? MOTOR_STATUS_INTERVAL_MS : MOTOR_STATUS_IDLE_INTERVAL_MS;
   if (now - lastMotorStatusTime >= statusInterval) {
     lastMotorStatusTime = now;
-    if (Serial) {
+    if (serialTxFree() >= SERIAL_TX_MOTOR_MIN_FREE) {
       for (int i = 0; i < 2; i++) {
-        Serial.print("{\"type\":\"motor_status\",\"motor_id\":");
-        Serial.print(i + 1);
-        Serial.print(",\"steps_remaining\":");
-        Serial.print(motors[i].steps_remaining);
-        Serial.print(",\"speed\":");
-        Serial.print(motor_speeds[i]);
-        Serial.print(",\"is_moving\":");
-        Serial.print(motors[i].is_moving ? "true" : "false");
-        Serial.println("}");
+        int n = snprintf(
+          jsonLineBuf, sizeof(jsonLineBuf),
+          "{\"type\":\"motor_status\",\"motor_id\":%d,\"steps_remaining\":%ld,\"speed\":%.2f,\"is_moving\":%s}\n",
+          i + 1,
+          motors[i].steps_remaining,
+          motor_speeds[i],
+          motors[i].is_moving ? "true" : "false"
+        );
+        if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
+          // If queue fills mid-batch, stop adding this cycle.
+          if (!serialTxEnqueue(jsonLineBuf, (size_t)n)) break;
+        }
       }
     }
   }
+
+  // Non-blocking drain of queued telemetry bytes.
+  drainSerialTxQueue();
 }
 
 void readSerialCommands() {
