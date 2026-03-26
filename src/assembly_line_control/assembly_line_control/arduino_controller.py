@@ -50,7 +50,7 @@ class ArduinoController(Node):
         self.connected = False
         self.connection_attempts = 0
         self.max_connection_attempts = 3
-        self.reconnect_delay = 5.0  # seconds between reconnection attempts
+        self.reconnect_delay = 2.0  # seconds between reconnection attempts
         self.last_successful_port = None
         
         # Published /arduino/status stability (UI): avoid flipping on transient serial errors
@@ -267,6 +267,32 @@ class ArduinoController(Node):
         
         self.get_logger().warn('Could not connect to any Arduino. Will retry...')
         self.connected = False
+
+    def _mark_disconnected(self, reason: str, close_port: bool = True):
+        """Mark Arduino link as disconnected so monitor thread re-scans/reconnects."""
+        was_connected = bool(self.connected)
+        self.connected = False
+        self._connected_since = None
+        self._pot_smoothed_raw = None
+        self.connection_attempts = 0
+
+        if close_port and self.serial_port:
+            try:
+                with self.serial_lock:
+                    try:
+                        if self.serial_port.is_open:
+                            self.serial_port.close()
+                    except Exception:
+                        pass
+            except Exception:
+                # Lock acquisition failures during shutdown should not block reconnect state.
+                pass
+            self.serial_port = None
+
+        if was_connected:
+            self.get_logger().warn(
+                f'Arduino disconnected ({reason}); will re-scan ports and reconnect automatically'
+            )
     
     def _try_connect_port(self, port):
         """Try to connect to a specific port.
@@ -435,6 +461,10 @@ class ArduinoController(Node):
         while self.running:
             try:
                 time.sleep(self.reconnect_delay)
+
+                # USB device can disappear while internal connected flag is still true.
+                if self.connected and (not self.serial_port or not self.serial_port.is_open):
+                    self._mark_disconnected('serial port closed', close_port=True)
                 
                 # Only try to reconnect if self.connected is explicitly False
                 # Don't check serial_port.is_open as it can be flaky
@@ -467,6 +497,8 @@ class ArduinoController(Node):
             try:
                 # Check if we have a valid connection
                 if not self.serial_port or not self.serial_port.is_open:
+                    if self.connected:
+                        self._mark_disconnected('read loop detected closed serial port', close_port=True)
                     time.sleep(0.5)
                     continue
                 
@@ -578,9 +610,10 @@ class ArduinoController(Node):
                 if self.running:
                     consecutive_errors += 1
                     if consecutive_errors >= max_consecutive_errors:
-                        self.get_logger().error(f'Serial connection lost after {consecutive_errors} errors: {e}')
-                        self.connected = False
-                        self._pot_smoothed_raw = None  # Reset so next connection starts fresh
+                        self._mark_disconnected(
+                            f'serial read errors after {consecutive_errors} failures: {e}',
+                            close_port=True,
+                        )
                     # Don't break - let the connection monitor handle reconnection
                 time.sleep(0.5)
             except Exception as e:
@@ -646,6 +679,7 @@ class ArduinoController(Node):
         if not self.connected:
             return
         if not self.serial_port or not getattr(self.serial_port, 'is_open', False):
+            self._mark_disconnected('serial health check found closed port', close_port=True)
             return
         if not self._connected_since:
             return
@@ -658,20 +692,13 @@ class ArduinoController(Node):
         self.get_logger().error(
             f'Serial port {self.last_successful_port} reports connected but no RX data; forcing reconnect'
         )
-        try:
-            with self.serial_lock:
-                try:
-                    self.serial_port.close()
-                except Exception:
-                    pass
-        finally:
-            self.serial_port = None
-            self.connected = False
-            self._connected_since = None
+        self._mark_disconnected('no RX data after connect', close_port=True)
 
     def send_command(self, command: dict):
         """Send a JSON command to the Arduino (thread-safe)"""
         if not self.connected or not self.serial_port or not self.serial_port.is_open:
+            if self.connected:
+                self._mark_disconnected('write path detected closed serial port', close_port=True)
             # Only log occasionally to avoid spam
             if not hasattr(self, '_last_disconnect_log') or time.time() - self._last_disconnect_log > 5:
                 self.get_logger().warn('Arduino not connected, command not sent')
@@ -686,7 +713,7 @@ class ArduinoController(Node):
             return True
         except serial.SerialException as e:
             self.get_logger().error(f'Serial write error: {e}')
-            # Don't set connected=False here - let read thread handle disconnect detection
+            self._mark_disconnected(f'serial write error: {e}', close_port=True)
             return False
         except Exception as e:
             self.get_logger().error(f'Error sending command: {e}')
