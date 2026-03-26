@@ -72,6 +72,15 @@ class ArduinoController(Node):
         # Potentiometer raw smoothing (EMA) - set after parameters are declared
         self._pot_smoothed_raw = None  # None until first sample
         
+        # Pot debug tracking for diagnosing data-path issues
+        self._pot_msg_count = 0
+        self._pot_first_msg_time = None
+        self._pot_last_raw = None
+        self._pot_last_serial_line = None
+        self._pot_parse_errors = 0
+        self._pot_last_debug_time = 0.0
+        self._pot_serial_lines_seen = 0
+        
         # Parameters (declare before any get_parameter)
         self.declare_parameter('serial_port', '')
         self.declare_parameter('serial_baud', 115200)
@@ -91,6 +100,7 @@ class ArduinoController(Node):
         self.relay4_status_pub = self.create_publisher(String, 'relay4/status', 10)
         self.connection_status_pub = self.create_publisher(String, 'arduino/status', 10)
         self.potentiometer_raw_pub = self.create_publisher(Float32, 'potentiometer/raw', 10)
+        self.potentiometer_debug_pub = self.create_publisher(String, 'potentiometer/debug', 10)
         self.serial_log_pub = self.create_publisher(String, 'arduino/serial_log', 10)
         self._serial_log_times = []  # monotonic timestamps for rate limiting (max 10/s)
 
@@ -140,6 +150,7 @@ class ArduinoController(Node):
         self.motor_update_timer = self.create_timer(0.1, self.update_motor_states)
         self.relay_status_timer = self.create_timer(1.0, self.publish_all_relay_status)
         self.connection_status_timer = self.create_timer(5.0, self.publish_connection_status)
+        self.pot_debug_timer = self.create_timer(2.0, self._publish_pot_debug)
         
         self.get_logger().info('Arduino controller started (unified motor + relay control)')
     
@@ -417,6 +428,8 @@ class ArduinoController(Node):
                                 raise ValueError('not a dict')
                             msg_type = data.get('type')
                             if msg_type == 'analog':
+                                self._pot_serial_lines_seen += 1
+                                self._pot_last_serial_line = line
                                 val = data.get('value')
                                 if isinstance(val, str):
                                     try:
@@ -435,7 +448,19 @@ class ArduinoController(Node):
                                     msg = Float32()
                                     msg.data = self._pot_smoothed_raw
                                     self.potentiometer_raw_pub.publish(msg)
+
+                                    self._pot_msg_count += 1
+                                    if self._pot_first_msg_time is None:
+                                        self._pot_first_msg_time = time.time()
+                                    self._pot_last_raw = raw
                                     handled = True
+                                else:
+                                    self._pot_parse_errors += 1
+                                    self.get_logger().warn(
+                                        f'[POT] analog msg had unparseable value: {data.get("value")!r}'
+                                    )
+
+                                self._publish_pot_debug()
                             elif msg_type == 'motor_status':
                                 motor_id = data.get('motor_id')
                                 try:
@@ -481,6 +506,32 @@ class ArduinoController(Node):
         msg = String()
         msg.data = text
         self.serial_log_pub.publish(msg)
+
+    def _publish_pot_debug(self):
+        """Publish potentiometer debug info (throttled to ~2 Hz) for web UI diagnostics."""
+        now = time.time()
+        if now - self._pot_last_debug_time < 0.5:
+            return
+        self._pot_last_debug_time = now
+        elapsed = (now - self._pot_first_msg_time) if self._pot_first_msg_time else 0
+        rate = self._pot_msg_count / elapsed if elapsed > 0.1 else 0.0
+        debug_data = {
+            'last_serial': self._pot_last_serial_line,
+            'last_raw': self._pot_last_raw,
+            'smoothed': self._pot_smoothed_raw,
+            'count': self._pot_msg_count,
+            'serial_lines_seen': self._pot_serial_lines_seen,
+            'rate_hz': round(rate, 1),
+            'parse_errors': self._pot_parse_errors,
+            'connected': self.connected,
+            'ts': now,
+        }
+        try:
+            debug_msg = String()
+            debug_msg.data = json.dumps(debug_data)
+            self.potentiometer_debug_pub.publish(debug_msg)
+        except Exception:
+            pass
 
     def send_command(self, command: dict):
         """Send a JSON command to the Arduino (thread-safe)"""

@@ -339,7 +339,8 @@ const ControlCenter = {
                 <span id="ccPotVal" class="text-gray-200 font-mono w-14">—</span>
             </div>
             <div id="ccPotSetp" class="text-[10px] text-gray-500 mt-1"></div>
-            <canvas id="ccPotCanvas" width="280" height="48" class="w-full bg-gray-900/50 rounded mt-1"></canvas>`;
+            <canvas id="ccPotCanvas" width="280" height="48" class="w-full bg-gray-900/50 rounded mt-1"></canvas>
+            <div id="ccPotDebug" class="mt-2 text-[10px] border border-gray-700 rounded p-2 bg-gray-900/60"></div>`;
             this._potDomReady = true;
         }
         const v = ROSBridge.lastPotRaw;
@@ -373,6 +374,72 @@ const ControlCenter = {
             }
             ctx.stroke();
         }
+
+        this.renderPotDebug();
+    },
+
+    renderPotDebug() {
+        const el = document.getElementById('ccPotDebug');
+        if (!el) return;
+
+        const d = ROSBridge.lastPotDebug;
+        const potTopicAge = ROSBridge.getTelemetryAgeSec('/potentiometer/raw');
+        const debugTopicAge = ROSBridge.getTelemetryAgeSec('/potentiometer/debug');
+        const potMeta = ROSBridge.telemetryMeta['/potentiometer/raw'];
+        const debugMeta = ROSBridge.telemetryMeta['/potentiometer/debug'];
+
+        const badge = (ok, label) =>
+            `<span class="inline-block px-1 rounded ${ok ? 'bg-green-900/60 text-green-400' : 'bg-red-900/60 text-red-400'}">${label}</span>`;
+
+        const rosOk = ROSBridge.isConnected;
+        const ardOk = ROSBridge.arduinoStatus && ROSBridge.arduinoStatus.connected;
+        const serialSeen = d && d.serial_lines_seen > 0;
+        const potParsed = d && d.count > 0;
+        const potOnTopic = ROSBridge.lastPotRaw != null;
+        const potFresh = potTopicAge != null && potTopicAge < 3;
+
+        let html = `<div class="text-gray-400 font-medium mb-1">Pot debug chain</div>`;
+        html += `<div class="flex flex-wrap gap-1 mb-1">`;
+        html += badge(rosOk, 'ROS Bridge');
+        html += `<span class="text-gray-600">→</span>`;
+        html += badge(ardOk, 'Arduino serial');
+        html += `<span class="text-gray-600">→</span>`;
+        html += badge(serialSeen, 'Serial analog lines');
+        html += `<span class="text-gray-600">→</span>`;
+        html += badge(potParsed, 'Parsed & published');
+        html += `<span class="text-gray-600">→</span>`;
+        html += badge(potOnTopic, 'Browser /pot/raw');
+        html += `<span class="text-gray-600">→</span>`;
+        html += badge(potFresh, potFresh ? 'Fresh' : 'Stale');
+        html += `</div>`;
+
+        if (d) {
+            html += `<table class="w-full border-collapse">`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Serial lines seen</td><td class="text-gray-200">${d.serial_lines_seen}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Parsed pot msgs</td><td class="text-gray-200">${d.count}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Parse errors</td><td class="${d.parse_errors > 0 ? 'text-red-400' : 'text-gray-200'}">${d.parse_errors}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Arduino→Python rate</td><td class="text-gray-200">${d.rate_hz} Hz</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Last raw value</td><td class="text-gray-200 font-mono">${d.last_raw != null ? d.last_raw : '—'}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Smoothed value</td><td class="text-gray-200 font-mono">${d.smoothed != null ? d.smoothed.toFixed(1) : '—'}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Arduino connected</td><td class="${d.connected ? 'text-green-400' : 'text-red-400'}">${d.connected ? 'yes' : 'no'}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Last serial line</td><td class="text-gray-300 font-mono truncate max-w-[200px]" title="${this._attr(d.last_serial || '')}">${this._esc(d.last_serial || '—')}</td></tr>`;
+            html += `</table>`;
+        } else {
+            html += `<div class="text-amber-400">No /potentiometer/debug data received yet.</div>`;
+            html += `<div class="text-gray-500 mt-1">Possible causes:</div>`;
+            html += `<ul class="text-gray-500 list-disc ml-4">`;
+            html += `<li>Arduino controller node not running</li>`;
+            html += `<li>Arduino not connected (check serial)</li>`;
+            html += `<li>Rosbridge not relaying the topic</li>`;
+            html += `</ul>`;
+        }
+
+        html += `<div class="mt-1 text-gray-500">`;
+        html += `/pot/raw topic: ${potMeta ? potMeta.hz.toFixed(1) + ' Hz' : 'no data'}, age ${potTopicAge != null ? potTopicAge.toFixed(1) + 's' : '—'}`;
+        html += ` · /pot/debug topic: ${debugMeta ? debugMeta.hz.toFixed(1) + ' Hz' : 'no data'}, age ${debugTopicAge != null ? debugTopicAge.toFixed(1) + 's' : '—'}`;
+        html += `</div>`;
+
+        el.innerHTML = html;
     },
 
     renderLiveSensors() {

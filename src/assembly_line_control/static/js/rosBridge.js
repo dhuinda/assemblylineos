@@ -25,6 +25,7 @@ const ROSBridge = {
     arduinoStatusSub: null,
     relayStatusSubs: [],
     potentiometerSub: null,
+    potDebugSub: null,
     motorSpeedSetpointSub: null,
     motor1SpeedEchoSub: null,
     motor2SpeedEchoSub: null,
@@ -36,6 +37,8 @@ const ROSBridge = {
     relayStates: { 1: null, 2: null, 3: null, 4: null },
     lastPotRaw: null,
     lastPotAtMs: 0,
+    lastPotDebug: null,
+    lastPotDebugAtMs: 0,
     /** Latest Float32 from /motor_speed/setpoint when present */
     motorSpeedSetpoint: null,
     /** Last speed msgs observed on /motorN/speed (bus echo / commanded) */
@@ -356,6 +359,7 @@ const ROSBridge = {
         this.relayStatusSubs.forEach(dropSub);
         this.relayStatusSubs = [];
         dropSub(this.potentiometerSub);
+        dropSub(this.potDebugSub);
         dropSub(this.motorSpeedSetpointSub);
         dropSub(this.motor1SpeedEchoSub);
         dropSub(this.motor2SpeedEchoSub);
@@ -475,6 +479,20 @@ const ROSBridge = {
             if (Number.isFinite(v)) {
                 this.lastPotRaw = v;
                 this.lastPotAtMs = Date.now();
+            }
+        });
+
+        this.potDebugSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/potentiometer/debug',
+            messageType: 'std_msgs/String'
+        });
+        this.potDebugSub.subscribe((msg) => {
+            this.recordTelemetry('/potentiometer/debug', msg.data);
+            const parsed = this.safeJsonParse(msg.data, '/potentiometer/debug');
+            if (parsed) {
+                this.lastPotDebug = parsed;
+                this.lastPotDebugAtMs = Date.now();
             }
         });
 
