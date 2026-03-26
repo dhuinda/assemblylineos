@@ -101,11 +101,12 @@ const unsigned long MIN_STEP_INTERVAL = 200;
 // Reject clearly invalid configured pins (board-dependent; Giga uses many numbers)
 #define PIN_NUMBER_MAX 255
 
-// TX headroom before emitting telemetry (skip cycle if buffer is tight)
-#define SERIAL_TX_HEADROOM_TELEM 128
-// Short analog JSON line ~45 bytes; avoid requiring full TELEM budget so pot keeps updating
-#define SERIAL_TX_HEADROOM_ANALOG 64
-#define SERIAL_TX_HEADROOM_VERBOSE 48
+// TX headroom before emitting telemetry (skip cycle if buffer is tight).
+// Keep these small: on some Arduino cores availableForWrite() can top out near 63.
+#define SERIAL_TX_HEADROOM_TELEM 24
+// Short analog JSON line ~45 bytes; actual line-size check below is authoritative.
+#define SERIAL_TX_HEADROOM_ANALOG 16
+#define SERIAL_TX_HEADROOM_VERBOSE 8
 
 // Output line buffer for JSON telemetry
 #define JSON_LINE_BUF 192
@@ -323,11 +324,12 @@ void loop() {
   // Only advance the interval after a successful send so congestion does not drop samples
   // while advancing time (host would see stuck / sparse pot values).
   if (now - lastPotReportTime >= POT_REPORT_INTERVAL_MS) {
-    if (serialCanWrite(SERIAL_TX_HEADROOM_ANALOG)) {
-      int val = analogRead(POT_PIN);
-      int n = snprintf(jsonLineBuf, sizeof(jsonLineBuf),
-                       "{\"type\":\"analog\",\"pin\":\"pot\",\"value\":%d}\n", val);
-      if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
+    int val = analogRead(POT_PIN);
+    int n = snprintf(jsonLineBuf, sizeof(jsonLineBuf),
+                     "{\"type\":\"analog\",\"pin\":\"pot\",\"value\":%d}\n", val);
+    if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
+      // Size-aware write gate avoids fixed-threshold starvation on small TX buffers.
+      if (serialCanWrite(n + 4) && serialCanWrite(SERIAL_TX_HEADROOM_ANALOG)) {
         Serial.write((const uint8_t*)jsonLineBuf, (size_t)n);
         lastPotReportTime = now;
       }
@@ -729,7 +731,9 @@ void processRelayCommandBuf(char* command) {
 }
 
 void updateMotors() {
-  for (int i = 0; i < 2; i++) {
+  static int rrStart = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    int i = (rrStart + pass) & 1;
     if (!motors[i].is_moving || motors[i].steps_remaining == 0) {
       continue;
     }
@@ -767,7 +771,9 @@ void updateMotors() {
         motors[i].steps_remaining++;
       }
 
-      motors[i].last_step_time += motors[i].step_interval;
+      // Use wall-clock pacing (no pulse bursts to "catch up"), which keeps
+      // both motors on the same scheduling behavior and avoids grinding bursts.
+      motors[i].last_step_time = current_time;
 
       if (motors[i].steps_remaining == 0) {
         motors[i].is_moving = false;
@@ -777,6 +783,7 @@ void updateMotors() {
       stepsThisLoop++;
     }
   }
+  rrStart ^= 1;
 }
 
 #define STEP_PULSE_WIDTH_US 2
