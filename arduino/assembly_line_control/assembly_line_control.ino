@@ -42,13 +42,10 @@ int RELAY_PINS[4] = {A0, A1, A2, A3};  // Default: A0-A3 (pins 54-57)
 
 // Potentiometer for variable motor speed (analog 0-1023, reported over serial)
 #define POT_PIN A6
-#define POT_REPORT_INTERVAL_MS 80
-unsigned long lastPotReportTime = 0;
-
-// Motor status: report steps_remaining and speed so host can show accurate time remaining
-#define MOTOR_STATUS_INTERVAL_MS 100   // When any motor is moving
-#define MOTOR_STATUS_IDLE_INTERVAL_MS 500  // When all motors idle
-unsigned long lastMotorStatusTime = 0;
+// Compact telemetry cadence:
+// one packet contains pot + both motor states to reduce serial overhead.
+#define TELEMETRY_INTERVAL_MS 50
+unsigned long lastTelemetryTime = 0;
 
 // Relay logic: typical boards are active-LOW (LOW = relay ON, HIGH = relay OFF).
 #define RELAY_OFF_LEVEL HIGH
@@ -101,22 +98,14 @@ const unsigned long MIN_STEP_INTERVAL = 200;
 // Reject clearly invalid configured pins (board-dependent; Giga uses many numbers)
 #define PIN_NUMBER_MAX 255
 
-// TX headroom before emitting telemetry (skip cycle if buffer is tight).
-// Keep these small: on some Arduino cores availableForWrite() can top out near 63.
-#define SERIAL_TX_HEADROOM_TELEM 24
-// Short analog JSON line ~45 bytes; actual line-size check below is authoritative.
-#define SERIAL_TX_HEADROOM_ANALOG 16
-#define SERIAL_TX_HEADROOM_VERBOSE 8
-
 // Output line buffer for JSON telemetry
 #define JSON_LINE_BUF 192
 char jsonLineBuf[JSON_LINE_BUF];
 
 // Non-blocking serial TX queue: telemetry is enqueued, then drained in small chunks.
 // This avoids long Serial.print() blocking pauses that cause motor stutter.
-#define SERIAL_TX_QUEUE_SIZE 2048
+#define SERIAL_TX_QUEUE_SIZE 4096
 #define SERIAL_TX_DRAIN_BUDGET 96   // Max bytes written from queue per loop()
-#define SERIAL_TX_MOTOR_MIN_FREE 256  // Skip motor_status when queue is tight
 char serialTxQueue[SERIAL_TX_QUEUE_SIZE];
 size_t serialTxHead = 0;  // Next write position
 size_t serialTxTail = 0;  // Next read position
@@ -131,6 +120,7 @@ void updateMotors(void);
 void stepMotor(int motor_index);
 unsigned long calculateStepInterval(float speed_steps_per_sec);
 void drainSerialTxQueue(void);
+void emitCompactTelemetry(unsigned long nowMs);
 
 static void trimBufferInPlace(char* s) {
   if (!s || !*s) return;
@@ -152,6 +142,13 @@ static bool serialCanWrite(int minFree) {
 
 static void serialPrintLnPriority(const char* msg) {
   Serial.println(msg);
+}
+
+static bool serialTxEnqueueLine(const char* line) {
+  if (!line) return false;
+  size_t n = strlen(line);
+  if (n == 0) return false;
+  return serialTxEnqueue(line, n);
 }
 
 static size_t serialTxUsed(void) {
@@ -178,10 +175,15 @@ static bool serialTxEnqueue(const char* data, size_t len) {
 void drainSerialTxQueue(void) {
   if (!Serial) return;
   int canWrite = Serial.availableForWrite();
-  if (canWrite <= 0) return;
-
-  size_t budget = (size_t)canWrite;
-  if (budget > (size_t)SERIAL_TX_DRAIN_BUDGET) budget = (size_t)SERIAL_TX_DRAIN_BUDGET;
+  size_t budget = 0;
+  if (canWrite > 0) {
+    budget = (size_t)canWrite;
+    if (budget > (size_t)SERIAL_TX_DRAIN_BUDGET) budget = (size_t)SERIAL_TX_DRAIN_BUDGET;
+  } else {
+    // Some USB-CDC cores intermittently report 0 even when writes still succeed.
+    // Use a tiny fallback budget so telemetry can still flow without long blocking.
+    budget = 16;
+  }
 
   while (budget > 0 && serialTxTail != serialTxHead) {
     size_t contiguous = (serialTxHead > serialTxTail)
@@ -326,9 +328,6 @@ void setup() {
   }
   delay(200);
 
-  Serial.println("Arduino Giga Assembly Line Control Ready");
-  Serial.println("Configuration: 2 stepper motors, 4 relays");
-
   for (int i = 0; i < 2; i++) {
     pinMode(MOTOR_PINS[i][0], OUTPUT);
     pinMode(MOTOR_PINS[i][1], OUTPUT);
@@ -363,8 +362,7 @@ void setup() {
 
   serialBufferIndex = 0;
 
-  Serial.println("Initialization complete");
-  Serial.println("Waiting for commands...");
+  serialTxEnqueueLine("{\"type\":\"ready\"}\n");
 }
 
 void loop() {
@@ -372,45 +370,34 @@ void loop() {
   readSerialCommands();
 
   unsigned long now = millis();
-
-  // Potentiometer telemetry (high priority): enqueue one JSON line.
-  if (now - lastPotReportTime >= POT_REPORT_INTERVAL_MS) {
-    lastPotReportTime = now;
-    int val = analogRead(POT_PIN);
-    int n = snprintf(
-      jsonLineBuf, sizeof(jsonLineBuf),
-      "{\"type\":\"analog\",\"pin\":\"pot\",\"value\":%d}\n", val
-    );
-    if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
-      (void)serialTxEnqueue(jsonLineBuf, (size_t)n);
-    }
-  }
-
-  // Motor status telemetry (lower priority): skip when queue is congested.
-  bool anyMoving = motors[0].is_moving || motors[1].is_moving;
-  unsigned long statusInterval = anyMoving ? MOTOR_STATUS_INTERVAL_MS : MOTOR_STATUS_IDLE_INTERVAL_MS;
-  if (now - lastMotorStatusTime >= statusInterval) {
-    lastMotorStatusTime = now;
-    if (serialTxFree() >= SERIAL_TX_MOTOR_MIN_FREE) {
-      for (int i = 0; i < 2; i++) {
-        int n = snprintf(
-          jsonLineBuf, sizeof(jsonLineBuf),
-          "{\"type\":\"motor_status\",\"motor_id\":%d,\"steps_remaining\":%ld,\"speed\":%.2f,\"is_moving\":%s}\n",
-          i + 1,
-          motors[i].steps_remaining,
-          motor_speeds[i],
-          motors[i].is_moving ? "true" : "false"
-        );
-        if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
-          // If queue fills mid-batch, stop adding this cycle.
-          if (!serialTxEnqueue(jsonLineBuf, (size_t)n)) break;
-        }
-      }
-    }
-  }
+  emitCompactTelemetry(now);
 
   // Non-blocking drain of queued telemetry bytes.
   drainSerialTxQueue();
+}
+
+void emitCompactTelemetry(unsigned long nowMs) {
+  if (nowMs - lastTelemetryTime < TELEMETRY_INTERVAL_MS) return;
+  lastTelemetryTime = nowMs;
+
+  int pot = analogRead(POT_PIN);
+  int n = snprintf(
+    jsonLineBuf,
+    sizeof(jsonLineBuf),
+    "{\"type\":\"telemetry\",\"pot\":%d,\"m1\":{\"r\":%ld,\"s\":%.2f,\"m\":%d},\"m2\":{\"r\":%ld,\"s\":%.2f,\"m\":%d}}\n",
+    pot,
+    motors[0].steps_remaining,
+    motor_speeds[0],
+    motors[0].is_moving ? 1 : 0,
+    motors[1].steps_remaining,
+    motor_speeds[1],
+    motors[1].is_moving ? 1 : 0
+  );
+  if (n <= 0 || n >= (int)sizeof(jsonLineBuf)) return;
+
+  // Drop telemetry frame if queue is tight; next frame arrives soon.
+  if (serialTxFree() < (size_t)n) return;
+  (void)serialTxEnqueue(jsonLineBuf, (size_t)n);
 }
 
 void readSerialCommands() {
@@ -460,13 +447,11 @@ void processCommandBuf(char* command) {
   } else if (strstr(command, "\"type\":\"relay\"") || strstr(command, "\"type\": \"relay\"")) {
     processRelayCommandBuf(command);
   } else {
-    serialPrintLnPriority("ERROR: Unknown command type");
+    serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"unknown_command\"}\n");
   }
 }
 
 void processEStopCommand() {
-  serialPrintLnPriority("E-STOP: Emergency stop activated!");
-
   for (int i = 0; i < 2; i++) {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
@@ -478,13 +463,10 @@ void processEStopCommand() {
   }
 
   digitalWrite(LED_BUILTIN, LOW);
-
-  serialPrintLnPriority("E-STOP: All motors stopped, all relays off");
+  serialTxEnqueueLine("{\"type\":\"estop_ack\"}\n");
 }
 
 void processConfigCommandBuf(char* command) {
-  serialPrintLnPriority("CONFIG: Processing pin configuration...");
-
   for (int i = 0; i < 2; i++) {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
@@ -513,15 +495,7 @@ void processConfigCommandBuf(char* command) {
         int stepPin = extractIntJson(jsonLineBuf, "step_pin");
         int dirPin = extractIntJson(jsonLineBuf, "dir_pin");
 
-        if (!pinsValidMotor(stepPin, dirPin)) {
-          if (Serial) {
-            Serial.print("ERROR: Invalid motor pins step=");
-            Serial.print(stepPin);
-            Serial.print(" dir=");
-            Serial.println(dirPin);
-          }
-          continue;
-        }
+        if (!pinsValidMotor(stepPin, dirPin)) continue;
 
         int motorIndex = motorId - 1;
         MOTOR_PINS[motorIndex][0] = stepPin;
@@ -534,16 +508,6 @@ void processConfigCommandBuf(char* command) {
         digitalWrite(MOTOR_PINS[motorIndex][1], LOW);
         motors[motorIndex].step_interval = calculateStepInterval(motor_speeds[motorIndex]);
 
-        if (Serial) {
-          Serial.print("CONFIG: Motor ");
-          Serial.print(motorId);
-          Serial.print(" -> STEP=");
-          Serial.print(stepPin);
-          Serial.print(", DIR=");
-          Serial.print(dirPin);
-          Serial.print(", invert=");
-          Serial.println(motor_invert_direction[motorIndex] ? 1 : 0);
-        }
       }
     }
   }
@@ -568,25 +532,13 @@ void processConfigCommandBuf(char* command) {
         jsonLineBuf[objLen] = '\0';
 
         int pin = extractIntJson(jsonLineBuf, "pin");
-        if (!pinValidGeneral(pin)) {
-          if (Serial) {
-            Serial.print("ERROR: Invalid relay pin ");
-            Serial.println(pin);
-          }
-          continue;
-        }
+        if (!pinValidGeneral(pin)) continue;
 
         int relayIndex = relayId - 1;
         RELAY_PINS[relayIndex] = pin;
         pinMode(RELAY_PINS[relayIndex], OUTPUT);
         digitalWrite(RELAY_PINS[relayIndex], relay_states[relayIndex] ? RELAY_ON_LEVEL : RELAY_OFF_LEVEL);
 
-        if (Serial) {
-          Serial.print("CONFIG: Relay ");
-          Serial.print(relayId);
-          Serial.print(" -> Pin=");
-          Serial.println(pin);
-        }
       }
     }
   }
@@ -649,37 +601,18 @@ void processConfigCommandBuf(char* command) {
 
         customPins[numCustomPins].configured = true;
 
-        if (Serial) {
-          Serial.print("CONFIG: Custom pin '");
-          Serial.print(customPins[numCustomPins].name);
-          Serial.print("' -> Pin=");
-          Serial.print(pin);
-          Serial.print(", Mode=");
-          Serial.println(modeBuf[0] ? modeBuf : "input");
-        }
-
         numCustomPins++;
         scan = objEnd + 1;
       }
     }
   }
-
-  serialPrintLnPriority("CONFIG: Pin configuration applied successfully");
-  if (Serial) {
-    Serial.print("CONFIG: ");
-    Serial.print(numCustomPins);
-    Serial.println(" custom pins configured");
-  }
+  serialTxEnqueueLine("{\"type\":\"config_ack\"}\n");
 }
 
 void processMotorCommandBuf(char* command) {
   int motor_id = extractIntJson(command, "motor_id");
   if (motor_id < 1 || motor_id > 2) {
-    if (Serial) {
-      Serial.print("ERROR: Invalid motor_id: ");
-      Serial.print(motor_id);
-      Serial.println(" (valid range: 1-2)");
-    }
+    serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"invalid_motor_id\"}\n");
     return;
   }
 
@@ -700,19 +633,7 @@ void processMotorCommandBuf(char* command) {
     motors[motor_index].is_moving = false;
     digitalWrite(MOTOR_PINS[motor_index][0], LOW);
 
-    if (Serial) {
-      Serial.print("STOP: Motor ");
-      Serial.print(motor_id);
-      Serial.println(" stopped (explicit)");
-    }
-  } else if (steps == 0) {
-    if (Serial) {
-      Serial.print("SPEED UPDATE: Motor ");
-      Serial.print(motor_id);
-      Serial.print(" speed=");
-      Serial.println(motor_speeds[motor_index]);
-    }
-  } else {
+  } else if (steps != 0) {
     motors[motor_index].steps_remaining += steps;
     motors[motor_index].is_moving = true;
     motors[motor_index].direction = (steps > 0);
@@ -722,17 +643,6 @@ void processMotorCommandBuf(char* command) {
     digitalWrite(MOTOR_PINS[motor_index][1], effective_dir ? HIGH : LOW);
 
     digitalWrite(LED_BUILTIN, HIGH);
-  }
-
-  if (Serial) {
-    Serial.print("OK: Motor ");
-    Serial.print(motor_id);
-    Serial.print(" steps=");
-    Serial.print(steps);
-    Serial.print(" total_remaining=");
-    Serial.print(motors[motor_index].steps_remaining);
-    Serial.print(" speed=");
-    Serial.println(motor_speeds[motor_index]);
   }
 }
 
@@ -745,10 +655,7 @@ static void strToLowerAscii(char* s) {
 void processRelayCommandBuf(char* command) {
   int relay_id = extractIntJson(command, "relay_id");
   if (relay_id < 1 || relay_id > 4) {
-    if (Serial) {
-      Serial.print("ERROR: Invalid relay_id: ");
-      Serial.println(relay_id);
-    }
+    serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"invalid_relay_id\"}\n");
     return;
   }
 
@@ -756,9 +663,7 @@ void processRelayCommandBuf(char* command) {
 
   char stateBuf[12];
   if (extractStringJson(command, "state", stateBuf, sizeof(stateBuf)) < 0) {
-    if (Serial) {
-      Serial.println("ERROR: Missing relay state");
-    }
+    serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"missing_relay_state\"}\n");
     return;
   }
   strToLowerAscii(stateBuf);
@@ -766,24 +671,11 @@ void processRelayCommandBuf(char* command) {
   if (strcmp(stateBuf, "on") == 0) {
     digitalWrite(RELAY_PINS[relay_index], RELAY_ON_LEVEL);
     relay_states[relay_index] = true;
-    if (Serial) {
-      Serial.print("OK: Relay ");
-      Serial.print(relay_id);
-      Serial.println(" ON");
-    }
   } else if (strcmp(stateBuf, "off") == 0) {
     digitalWrite(RELAY_PINS[relay_index], RELAY_OFF_LEVEL);
     relay_states[relay_index] = false;
-    if (Serial) {
-      Serial.print("OK: Relay ");
-      Serial.print(relay_id);
-      Serial.println(" OFF");
-    }
   } else {
-    if (Serial) {
-      Serial.print("ERROR: Invalid relay state: ");
-      Serial.println(stateBuf);
-    }
+    serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"invalid_relay_state\"}\n");
   }
 }
 
@@ -795,24 +687,20 @@ void updateMotors() {
       continue;
     }
 
-    int stepsThisLoop = 0;
-    while (stepsThisLoop < MAX_STEPS_PER_MOTOR_LOOP
-           && motors[i].is_moving
-           && motors[i].steps_remaining != 0) {
-      unsigned long current_time = micros();
+    unsigned long nowUs = micros();
+    unsigned long elapsed = nowUs - motors[i].last_step_time;
+    unsigned long interval = motors[i].step_interval;
+    if (elapsed < interval) continue;
 
-      unsigned long overdue = current_time - motors[i].last_step_time;
-      unsigned long maxLag = motors[i].step_interval * (unsigned long)MAX_STEP_LAG_INTERVALS;
-      if (overdue > maxLag) {
-        motors[i].last_step_time = current_time - maxLag;
-      }
+    unsigned long dueSteps = elapsed / interval;
+    if (dueSteps > (unsigned long)MAX_STEP_LAG_INTERVALS) {
+      dueSteps = (unsigned long)MAX_STEP_LAG_INTERVALS;
+    }
+    if (dueSteps > (unsigned long)MAX_STEPS_PER_MOTOR_LOOP) {
+      dueSteps = (unsigned long)MAX_STEPS_PER_MOTOR_LOOP;
+    }
 
-      if ((micros() - motors[i].last_step_time) < motors[i].step_interval) {
-        break;
-      }
-
-      current_time = micros();
-
+    for (unsigned long s = 0; s < dueSteps && motors[i].steps_remaining != 0; s++) {
       bool new_direction = (motors[i].steps_remaining > 0);
       if (motors[i].direction != new_direction) {
         motors[i].direction = new_direction;
@@ -822,22 +710,18 @@ void updateMotors() {
 
       stepMotor(i);
 
-      if (motors[i].steps_remaining > 0) {
-        motors[i].steps_remaining--;
-      } else {
-        motors[i].steps_remaining++;
-      }
-
-      // Use wall-clock pacing (no pulse bursts to "catch up"), which keeps
-      // both motors on the same scheduling behavior and avoids grinding bursts.
-      motors[i].last_step_time = current_time;
+      if (motors[i].steps_remaining > 0) motors[i].steps_remaining--;
+      else motors[i].steps_remaining++;
 
       if (motors[i].steps_remaining == 0) {
         motors[i].is_moving = false;
         digitalWrite(MOTOR_PINS[i][0], LOW);
       }
+    }
 
-      stepsThisLoop++;
+    motors[i].last_step_time += (unsigned long)(dueSteps * interval);
+    if ((nowUs - motors[i].last_step_time) > (unsigned long)(MAX_STEP_LAG_INTERVALS * interval)) {
+      motors[i].last_step_time = nowUs;
     }
   }
   rrStart ^= 1;

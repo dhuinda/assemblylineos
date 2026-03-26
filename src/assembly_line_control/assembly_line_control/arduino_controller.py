@@ -296,7 +296,7 @@ class ArduinoController(Node):
             time.sleep(2.0)
             
             # Clear any startup messages, then verify we actually receive telemetry.
-            # The firmware should emit at least motor_status (<=500ms) and analog (80ms).
+            # The firmware emits newline-delimited JSON telemetry continuously.
             with self.serial_lock:
                 try:
                     self.serial_port.reset_input_buffer()
@@ -306,7 +306,7 @@ class ArduinoController(Node):
                 t0 = time.time()
                 probe = b""
                 got_newline = False
-                while time.time() - t0 < 1.5:
+                while time.time() - t0 < 3.0:
                     try:
                         n = int(self.serial_port.in_waiting or 0)
                     except Exception:
@@ -491,7 +491,38 @@ class ArduinoController(Node):
                             if not isinstance(data, dict):
                                 raise ValueError('not a dict')
                             msg_type = data.get('type')
-                            if msg_type == 'analog':
+                            if msg_type == 'telemetry':
+                                self._pot_serial_lines_seen += 1
+                                self._pot_last_serial_line = line
+                                val = data.get('pot')
+                                if isinstance(val, str):
+                                    try:
+                                        val = float(val.strip())
+                                    except (TypeError, ValueError):
+                                        val = None
+                                if isinstance(val, (int, float)):
+                                    raw = max(0.0, min(1023.0, float(val)))
+                                    if self._pot_smoothed_raw is None:
+                                        self._pot_smoothed_raw = raw
+                                    else:
+                                        self._pot_smoothed_raw = (
+                                            self._pot_smoothing_alpha * raw
+                                            + (1.0 - self._pot_smoothing_alpha) * self._pot_smoothed_raw
+                                        )
+                                    msg = Float32()
+                                    msg.data = self._pot_smoothed_raw
+                                    self.potentiometer_raw_pub.publish(msg)
+
+                                    self._pot_msg_count += 1
+                                    if self._pot_first_msg_time is None:
+                                        self._pot_first_msg_time = time.time()
+                                    self._pot_last_raw = raw
+
+                                self._apply_compact_motor_status(1, data.get('m1', {}))
+                                self._apply_compact_motor_status(2, data.get('m2', {}))
+                                handled = True
+                                self._publish_pot_debug()
+                            elif msg_type == 'analog':
                                 self._pot_serial_lines_seen += 1
                                 self._pot_last_serial_line = line
                                 val = data.get('value')
@@ -762,6 +793,35 @@ class ArduinoController(Node):
             if not state['is_moving']:
                 state['steps_remaining'] = 0
                 # Keep steps_total so UI can show "0 remaining / N total"
+        self._last_arduino_status_time[motor_id] = time.time()
+        self.publish_motor_status(motor_id)
+
+    def _apply_compact_motor_status(self, motor_id: int, data: dict):
+        """Update motor state from compact telemetry payload."""
+        if not isinstance(data, dict):
+            return
+        state = self.motor_states[motor_id]
+
+        steps_remaining = data.get('r')
+        if steps_remaining is not None:
+            try:
+                state['steps_remaining'] = abs(int(steps_remaining))
+            except (TypeError, ValueError):
+                pass
+
+        speed = data.get('s')
+        if speed is not None:
+            try:
+                state['speed'] = max(1.0, min(6500.0, float(speed)))
+            except (TypeError, ValueError):
+                pass
+
+        is_moving = data.get('m')
+        if is_moving is not None:
+            state['is_moving'] = bool(is_moving)
+            if not state['is_moving']:
+                state['steps_remaining'] = 0
+
         self._last_arduino_status_time[motor_id] = time.time()
         self.publish_motor_status(motor_id)
     
