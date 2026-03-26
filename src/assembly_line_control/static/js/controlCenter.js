@@ -414,16 +414,44 @@ const ControlCenter = {
         html += `</div>`;
 
         if (d) {
+            const totalLines = d.total_serial_lines || 0;
+            const motorLines = d.motor_status_lines || 0;
+            const jsonErrors = d.json_parse_errors || 0;
+
+            html += `<div class="text-gray-400 font-medium mb-1 mt-2">All serial traffic from Arduino</div>`;
             html += `<table class="w-full border-collapse">`;
-            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Serial lines seen</td><td class="text-gray-200">${d.serial_lines_seen}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Total serial lines received</td><td class="${totalLines > 0 ? 'text-green-400' : 'text-red-400'} font-bold">${totalLines}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">↳ motor_status lines</td><td class="text-gray-200">${motorLines}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">↳ analog (pot) lines</td><td class="${d.serial_lines_seen > 0 ? 'text-green-400' : 'text-red-400'} font-bold">${d.serial_lines_seen}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">↳ other / non-JSON</td><td class="text-gray-200">${Math.max(0, totalLines - motorLines - d.serial_lines_seen)}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">JSON parse errors</td><td class="${jsonErrors > 0 ? 'text-amber-400' : 'text-gray-200'}">${jsonErrors}</td></tr>`;
+            html += `</table>`;
+
+            html += `<div class="text-gray-400 font-medium mb-1 mt-2">Potentiometer pipeline</div>`;
+            html += `<table class="w-full border-collapse">`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Analog lines seen</td><td class="text-gray-200">${d.serial_lines_seen}</td></tr>`;
             html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Parsed pot msgs</td><td class="text-gray-200">${d.count}</td></tr>`;
-            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Parse errors</td><td class="${d.parse_errors > 0 ? 'text-red-400' : 'text-gray-200'}">${d.parse_errors}</td></tr>`;
-            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Arduino→Python rate</td><td class="text-gray-200">${d.rate_hz} Hz</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Pot parse errors</td><td class="${d.parse_errors > 0 ? 'text-red-400' : 'text-gray-200'}">${d.parse_errors}</td></tr>`;
+            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Pot rate (Arduino→Python)</td><td class="text-gray-200">${d.rate_hz} Hz</td></tr>`;
             html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Last raw value</td><td class="text-gray-200 font-mono">${d.last_raw != null ? d.last_raw : '—'}</td></tr>`;
             html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Smoothed value</td><td class="text-gray-200 font-mono">${d.smoothed != null ? d.smoothed.toFixed(1) : '—'}</td></tr>`;
             html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Arduino connected</td><td class="${d.connected ? 'text-green-400' : 'text-red-400'}">${d.connected ? 'yes' : 'no'}</td></tr>`;
-            html += `<tr class="border-b border-gray-700/40"><td class="text-gray-500 pr-2">Last serial line</td><td class="text-gray-300 font-mono truncate max-w-[200px]" title="${this._attr(d.last_serial || '')}">${this._esc(d.last_serial || '—')}</td></tr>`;
             html += `</table>`;
+
+            const recent = d.recent_lines || [];
+            if (recent.length > 0) {
+                html += `<div class="text-gray-400 font-medium mb-1 mt-2">Last ${recent.length} serial lines (raw)</div>`;
+                html += `<div class="bg-gray-950 rounded p-1.5 font-mono text-[9px] leading-tight max-h-24 overflow-y-auto">`;
+                recent.forEach((line) => {
+                    const isAnalog = line.includes('"analog"');
+                    const isMotor = line.includes('"motor_status"');
+                    const cls = isAnalog ? 'text-purple-400' : isMotor ? 'text-blue-400' : 'text-gray-400';
+                    html += `<div class="${cls} truncate" title="${this._attr(line)}">${this._esc(line)}</div>`;
+                });
+                html += `</div>`;
+            } else {
+                html += `<div class="text-amber-400 mt-2">No serial lines received from Arduino yet.</div>`;
+            }
         } else {
             html += `<div class="text-amber-400">No /potentiometer/debug data received yet.</div>`;
             html += `<div class="text-gray-500 mt-1">Possible causes:</div>`;

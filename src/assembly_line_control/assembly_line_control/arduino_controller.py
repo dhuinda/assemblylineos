@@ -81,6 +81,13 @@ class ArduinoController(Node):
         self._pot_last_debug_time = 0.0
         self._pot_serial_lines_seen = 0
         
+        # Total serial debug: track everything the Arduino sends
+        self._serial_total_lines = 0
+        self._serial_motor_status_lines = 0
+        self._serial_json_errors = 0
+        self._serial_recent_lines = []  # ring buffer of last N lines
+        self._serial_recent_max = 8
+        
         # Parameters (declare before any get_parameter)
         self.declare_parameter('serial_port', '')
         self.declare_parameter('serial_baud', 115200)
@@ -421,6 +428,10 @@ class ArduinoController(Node):
                     line = line.strip()
                     if line:
                         consecutive_errors = 0  # Reset on valid data
+                        self._serial_total_lines += 1
+                        self._serial_recent_lines.append(line)
+                        if len(self._serial_recent_lines) > self._serial_recent_max:
+                            self._serial_recent_lines.pop(0)
                         handled = False
                         try:
                             data = json.loads(line)
@@ -462,6 +473,7 @@ class ArduinoController(Node):
 
                                 self._publish_pot_debug()
                             elif msg_type == 'motor_status':
+                                self._serial_motor_status_lines += 1
                                 motor_id = data.get('motor_id')
                                 try:
                                     if motor_id is not None:
@@ -472,7 +484,7 @@ class ArduinoController(Node):
                                     self._apply_arduino_motor_status(motor_id, data)
                                     handled = True
                         except (json.JSONDecodeError, TypeError, ValueError):
-                            pass
+                            self._serial_json_errors += 1
                         if not handled:
                             self.get_logger().info(f'[Arduino] {line}')
                             self._maybe_publish_serial_log(line)
@@ -525,6 +537,10 @@ class ArduinoController(Node):
             'parse_errors': self._pot_parse_errors,
             'connected': self.connected,
             'ts': now,
+            'total_serial_lines': self._serial_total_lines,
+            'motor_status_lines': self._serial_motor_status_lines,
+            'json_parse_errors': self._serial_json_errors,
+            'recent_lines': self._serial_recent_lines[-4:],
         }
         try:
             debug_msg = String()
