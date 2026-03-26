@@ -141,9 +141,7 @@ static bool serialCanWrite(int minFree) {
 }
 
 static void serialPrintLnPriority(const char* msg) {
-  if (serialCanWrite(8)) {
-    Serial.println(msg);
-  }
+  Serial.println(msg);
 }
 
 // Find "\"key\":" then first non-space after colon
@@ -321,26 +319,29 @@ void loop() {
 
   unsigned long now = millis();
 
-  // Only advance the interval after a successful send so congestion does not drop samples
-  // while advancing time (host would see stuck / sparse pot values).
+  // Potentiometer reporting — runs FIRST so it isn't starved by motor_status.
+  // Uses Serial.print() (which may briefly block if the TX buffer is full but
+  // will always complete once the host drains bytes).  The old approach gated
+  // on serialCanWrite(~49) which silently dropped every write when the Giga's
+  // USB-CDC availableForWrite() returned 0 during the initial handshake or
+  // under momentary back-pressure.
   if (now - lastPotReportTime >= POT_REPORT_INTERVAL_MS) {
-    int val = analogRead(POT_PIN);
-    int n = snprintf(jsonLineBuf, sizeof(jsonLineBuf),
-                     "{\"type\":\"analog\",\"pin\":\"pot\",\"value\":%d}\n", val);
-    if (n > 0 && n < (int)sizeof(jsonLineBuf)) {
-      // Size-aware write gate avoids fixed-threshold starvation on small TX buffers.
-      if (serialCanWrite(n + 4) && serialCanWrite(SERIAL_TX_HEADROOM_ANALOG)) {
-        Serial.write((const uint8_t*)jsonLineBuf, (size_t)n);
-        lastPotReportTime = now;
-      }
+    lastPotReportTime = now;
+    if (Serial) {
+      int val = analogRead(POT_PIN);
+      Serial.print("{\"type\":\"analog\",\"pin\":\"pot\",\"value\":");
+      Serial.print(val);
+      Serial.println("}");
     }
   }
 
+  // Motor status reporting — same fix: write directly via Serial.print()
+  // instead of gating on serialCanWrite() which can starve output on USB-CDC.
   bool anyMoving = motors[0].is_moving || motors[1].is_moving;
   unsigned long statusInterval = anyMoving ? MOTOR_STATUS_INTERVAL_MS : MOTOR_STATUS_IDLE_INTERVAL_MS;
   if (now - lastMotorStatusTime >= statusInterval) {
     lastMotorStatusTime = now;
-    if (serialCanWrite(SERIAL_TX_HEADROOM_TELEM)) {
+    if (Serial) {
       for (int i = 0; i < 2; i++) {
         Serial.print("{\"type\":\"motor_status\",\"motor_id\":");
         Serial.print(i + 1);
@@ -388,7 +389,7 @@ void processCommandBuf(char* command) {
   if (!command[0]) return;
 
 #if DEBUG_SERIAL
-  if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+  if (Serial) {
     Serial.print("Received: ");
     Serial.println(command);
   }
@@ -457,7 +458,7 @@ void processConfigCommandBuf(char* command) {
         int dirPin = extractIntJson(jsonLineBuf, "dir_pin");
 
         if (!pinsValidMotor(stepPin, dirPin)) {
-          if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+          if (Serial) {
             Serial.print("ERROR: Invalid motor pins step=");
             Serial.print(stepPin);
             Serial.print(" dir=");
@@ -477,7 +478,7 @@ void processConfigCommandBuf(char* command) {
         digitalWrite(MOTOR_PINS[motorIndex][1], LOW);
         motors[motorIndex].step_interval = calculateStepInterval(motor_speeds[motorIndex]);
 
-        if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+        if (Serial) {
           Serial.print("CONFIG: Motor ");
           Serial.print(motorId);
           Serial.print(" -> STEP=");
@@ -512,7 +513,7 @@ void processConfigCommandBuf(char* command) {
 
         int pin = extractIntJson(jsonLineBuf, "pin");
         if (!pinValidGeneral(pin)) {
-          if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+          if (Serial) {
             Serial.print("ERROR: Invalid relay pin ");
             Serial.println(pin);
           }
@@ -524,7 +525,7 @@ void processConfigCommandBuf(char* command) {
         pinMode(RELAY_PINS[relayIndex], OUTPUT);
         digitalWrite(RELAY_PINS[relayIndex], relay_states[relayIndex] ? RELAY_ON_LEVEL : RELAY_OFF_LEVEL);
 
-        if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+        if (Serial) {
           Serial.print("CONFIG: Relay ");
           Serial.print(relayId);
           Serial.print(" -> Pin=");
@@ -592,7 +593,7 @@ void processConfigCommandBuf(char* command) {
 
         customPins[numCustomPins].configured = true;
 
-        if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+        if (Serial) {
           Serial.print("CONFIG: Custom pin '");
           Serial.print(customPins[numCustomPins].name);
           Serial.print("' -> Pin=");
@@ -608,7 +609,7 @@ void processConfigCommandBuf(char* command) {
   }
 
   serialPrintLnPriority("CONFIG: Pin configuration applied successfully");
-  if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+  if (Serial) {
     Serial.print("CONFIG: ");
     Serial.print(numCustomPins);
     Serial.println(" custom pins configured");
@@ -618,7 +619,7 @@ void processConfigCommandBuf(char* command) {
 void processMotorCommandBuf(char* command) {
   int motor_id = extractIntJson(command, "motor_id");
   if (motor_id < 1 || motor_id > 2) {
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.print("ERROR: Invalid motor_id: ");
       Serial.print(motor_id);
       Serial.println(" (valid range: 1-2)");
@@ -643,13 +644,13 @@ void processMotorCommandBuf(char* command) {
     motors[motor_index].is_moving = false;
     digitalWrite(MOTOR_PINS[motor_index][0], LOW);
 
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.print("STOP: Motor ");
       Serial.print(motor_id);
       Serial.println(" stopped (explicit)");
     }
   } else if (steps == 0) {
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.print("SPEED UPDATE: Motor ");
       Serial.print(motor_id);
       Serial.print(" speed=");
@@ -667,7 +668,7 @@ void processMotorCommandBuf(char* command) {
     digitalWrite(LED_BUILTIN, HIGH);
   }
 
-  if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+  if (Serial) {
     Serial.print("OK: Motor ");
     Serial.print(motor_id);
     Serial.print(" steps=");
@@ -688,7 +689,7 @@ static void strToLowerAscii(char* s) {
 void processRelayCommandBuf(char* command) {
   int relay_id = extractIntJson(command, "relay_id");
   if (relay_id < 1 || relay_id > 4) {
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.print("ERROR: Invalid relay_id: ");
       Serial.println(relay_id);
     }
@@ -699,7 +700,7 @@ void processRelayCommandBuf(char* command) {
 
   char stateBuf[12];
   if (extractStringJson(command, "state", stateBuf, sizeof(stateBuf)) < 0) {
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.println("ERROR: Missing relay state");
     }
     return;
@@ -709,7 +710,7 @@ void processRelayCommandBuf(char* command) {
   if (strcmp(stateBuf, "on") == 0) {
     digitalWrite(RELAY_PINS[relay_index], RELAY_ON_LEVEL);
     relay_states[relay_index] = true;
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.print("OK: Relay ");
       Serial.print(relay_id);
       Serial.println(" ON");
@@ -717,13 +718,13 @@ void processRelayCommandBuf(char* command) {
   } else if (strcmp(stateBuf, "off") == 0) {
     digitalWrite(RELAY_PINS[relay_index], RELAY_OFF_LEVEL);
     relay_states[relay_index] = false;
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.print("OK: Relay ");
       Serial.print(relay_id);
       Serial.println(" OFF");
     }
   } else {
-    if (serialCanWrite(SERIAL_TX_HEADROOM_VERBOSE)) {
+    if (Serial) {
       Serial.print("ERROR: Invalid relay state: ");
       Serial.println(stateBuf);
     }

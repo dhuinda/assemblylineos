@@ -87,6 +87,7 @@ class ArduinoController(Node):
         self._serial_json_errors = 0
         self._serial_recent_lines = []  # ring buffer of last N lines
         self._serial_recent_max = 8
+        self._connected_since = None
         
         # Parameters (declare before any get_parameter)
         self.declare_parameter('serial_port', '')
@@ -158,6 +159,7 @@ class ArduinoController(Node):
         self.relay_status_timer = self.create_timer(1.0, self.publish_all_relay_status)
         self.connection_status_timer = self.create_timer(5.0, self.publish_connection_status)
         self.pot_debug_timer = self.create_timer(2.0, self._publish_pot_debug)
+        self.serial_health_timer = self.create_timer(3.0, self._check_serial_rx_health)
         
         self.get_logger().info('Arduino controller started (unified motor + relay control)')
     
@@ -267,7 +269,13 @@ class ArduinoController(Node):
         self.connected = False
     
     def _try_connect_port(self, port):
-        """Try to connect to a specific port - if port opens, we're connected"""
+        """Try to connect to a specific port.
+
+        IMPORTANT: A port being open is not enough. Some systems have multiple USB serial
+        devices that can be opened successfully but are not the Arduino. We only treat
+        the connection as valid if we actually receive newline-delimited data soon after
+        opening (the firmware emits periodic JSON telemetry).
+        """
         try:
             # Close existing connection if any
             if self.serial_port and self.serial_port.is_open:
@@ -287,15 +295,60 @@ class ArduinoController(Node):
             # Wait for Arduino to reset after connection
             time.sleep(2.0)
             
-            # Clear any startup messages
-            self.serial_port.reset_input_buffer()
-            
-            # If we got here, port opened successfully - we're connected
+            # Clear any startup messages, then verify we actually receive telemetry.
+            # The firmware should emit at least motor_status (<=500ms) and analog (80ms).
+            with self.serial_lock:
+                try:
+                    self.serial_port.reset_input_buffer()
+                except Exception:
+                    pass
+
+                t0 = time.time()
+                probe = b""
+                got_newline = False
+                while time.time() - t0 < 1.5:
+                    try:
+                        n = int(self.serial_port.in_waiting or 0)
+                    except Exception:
+                        n = 0
+                    if n > 0:
+                        probe += self.serial_port.read(n)
+                        if b"\n" in probe:
+                            got_newline = True
+                            break
+                    time.sleep(0.05)
+
+            if not got_newline:
+                # Treat as not-the-Arduino (or stalled Arduino). Close and keep searching.
+                try:
+                    self.serial_port.close()
+                except Exception:
+                    pass
+                self.serial_port = None
+                self.connected = False
+                self.get_logger().warn(f'Opened {port} but received no telemetry; skipping this port')
+                return False
+
+            # Reset serial debug counters on a verified connection
+            self._serial_total_lines = 0
+            self._serial_motor_status_lines = 0
+            self._serial_json_errors = 0
+            self._serial_recent_lines = []
+            self._pot_msg_count = 0
+            self._pot_first_msg_time = None
+            self._pot_last_raw = None
+            self._pot_last_serial_line = None
+            self._pot_parse_errors = 0
+            self._pot_serial_lines_seen = 0
+            self._pot_smoothed_raw = None
+            self._connected_since = time.time()
+
+            # Verified: port opens and we see newline-delimited data
             self.connected = True
             self.last_successful_port = port
             self.connection_attempts = 0
             self._arduino_status_false_ticks = 0
-            self.get_logger().info(f'✓ Connected to Arduino on {port} at {self.serial_baud} baud')
+            self.get_logger().info(f'✓ Connected to Arduino on {port} at {self.serial_baud} baud (telemetry verified)')
             
             # Immediately publish connection status
             self._publish_connected_status()
@@ -541,6 +594,10 @@ class ArduinoController(Node):
             'motor_status_lines': self._serial_motor_status_lines,
             'json_parse_errors': self._serial_json_errors,
             'recent_lines': self._serial_recent_lines[-4:],
+            'port': self.last_successful_port,
+            'baud': self.serial_baud,
+            'is_open': bool(self.serial_port and self.serial_port.is_open),
+            'in_waiting': int(self.serial_port.in_waiting) if (self.serial_port and self.serial_port.is_open) else 0,
         }
         try:
             debug_msg = String()
@@ -548,6 +605,38 @@ class ArduinoController(Node):
             self.potentiometer_debug_pub.publish(debug_msg)
         except Exception:
             pass
+
+    def _check_serial_rx_health(self):
+        """If we claim 'connected' but never receive any lines, force a reconnect.
+
+        This fixes the real-world failure mode where a non-Arduino serial device is opened
+        successfully (so UI shows connected), but the RX side is silent.
+        """
+        if not self.connected:
+            return
+        if not self.serial_port or not getattr(self.serial_port, 'is_open', False):
+            return
+        if not self._connected_since:
+            return
+        # Give a short grace period after connect
+        if (time.time() - self._connected_since) < 4.0:
+            return
+        if self._serial_total_lines > 0:
+            return
+
+        self.get_logger().error(
+            f'Serial port {self.last_successful_port} reports connected but no RX data; forcing reconnect'
+        )
+        try:
+            with self.serial_lock:
+                try:
+                    self.serial_port.close()
+                except Exception:
+                    pass
+        finally:
+            self.serial_port = None
+            self.connected = False
+            self._connected_since = None
 
     def send_command(self, command: dict):
         """Send a JSON command to the Arduino (thread-safe)"""
