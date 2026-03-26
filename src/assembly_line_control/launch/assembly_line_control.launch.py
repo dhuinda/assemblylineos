@@ -40,7 +40,9 @@ def generate_launch_description():
         executable='rosbridge_websocket',
         name='rosbridge_websocket',
         output='screen',
-        arguments=['--port', LaunchConfiguration('rosbridge_port')],
+        parameters=[{
+            'port': LaunchConfiguration('rosbridge_port'),
+        }],
     )
     
     # Start the web server that serves the HTML interface

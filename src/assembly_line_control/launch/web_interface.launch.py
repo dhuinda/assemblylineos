@@ -26,13 +26,14 @@ def generate_launch_description():
     )
     
     # ROS Bridge Server Node
-    # Note: rosbridge_server uses command-line arguments, not parameters
     rosbridge_node = Node(
         package='rosbridge_server',
         executable='rosbridge_websocket',
         name='rosbridge_websocket',
         output='screen',
-        arguments=['--port', LaunchConfiguration('rosbridge_port')],
+        parameters=[{
+            'port': LaunchConfiguration('rosbridge_port'),
+        }],
     )
     
     # Web Interface Node (minimal - just serves HTML)
