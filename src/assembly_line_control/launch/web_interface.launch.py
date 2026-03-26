@@ -31,6 +31,8 @@ def generate_launch_description():
         executable='rosbridge_websocket',
         name='rosbridge_websocket',
         output='screen',
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[{
             'port': LaunchConfiguration('rosbridge_port'),
         }],

@@ -44,7 +44,8 @@ int RELAY_PINS[4] = {A0, A1, A2, A3};  // Default: A0-A3 (pins 54-57)
 #define POT_PIN A6
 // Compact telemetry cadence:
 // one packet contains pot + both motor states to reduce serial overhead.
-#define TELEMETRY_INTERVAL_MS 50
+#define TELEMETRY_MOVING_INTERVAL_MS 60
+#define TELEMETRY_IDLE_INTERVAL_MS 180
 unsigned long lastTelemetryTime = 0;
 
 // Relay logic: typical boards are active-LOW (LOW = relay ON, HIGH = relay OFF).
@@ -84,14 +85,14 @@ char serialBuffer[SERIAL_BUFFER_MAX];
 size_t serialBufferIndex = 0;
 
 // Max bytes read toward one line per loop() — keeps motion/telemetry fair
-#define SERIAL_READ_BUDGET 96
+#define SERIAL_READ_BUDGET 48
 
 #define DEBUG_SERIAL 0
 
 const unsigned long MIN_STEP_INTERVAL = 200;
 
 // Catch-up stepping (per motor per loop)
-#define MAX_STEPS_PER_MOTOR_LOOP 24
+#define MAX_STEPS_PER_MOTOR_LOOP 1
 // If we fall behind more than this many step intervals, snap schedule to avoid a huge burst
 #define MAX_STEP_LAG_INTERVALS 8
 
@@ -176,14 +177,9 @@ void drainSerialTxQueue(void) {
   if (!Serial) return;
   int canWrite = Serial.availableForWrite();
   size_t budget = 0;
-  if (canWrite > 0) {
-    budget = (size_t)canWrite;
-    if (budget > (size_t)SERIAL_TX_DRAIN_BUDGET) budget = (size_t)SERIAL_TX_DRAIN_BUDGET;
-  } else {
-    // Some USB-CDC cores intermittently report 0 even when writes still succeed.
-    // Use a tiny fallback budget so telemetry can still flow without long blocking.
-    budget = 16;
-  }
+  if (canWrite <= 0) return;
+  budget = (size_t)canWrite;
+  if (budget > (size_t)SERIAL_TX_DRAIN_BUDGET) budget = (size_t)SERIAL_TX_DRAIN_BUDGET;
 
   while (budget > 0 && serialTxTail != serialTxHead) {
     size_t contiguous = (serialTxHead > serialTxTail)
@@ -366,31 +362,38 @@ void setup() {
 }
 
 void loop() {
+  // Prioritize deterministic stepping cadence.
   updateMotors();
   readSerialCommands();
+  updateMotors();
 
   unsigned long now = millis();
   emitCompactTelemetry(now);
 
   // Non-blocking drain of queued telemetry bytes.
   drainSerialTxQueue();
+  updateMotors();
 }
 
 void emitCompactTelemetry(unsigned long nowMs) {
-  if (nowMs - lastTelemetryTime < TELEMETRY_INTERVAL_MS) return;
+  bool anyMoving = motors[0].is_moving || motors[1].is_moving;
+  unsigned long intervalMs = anyMoving ? TELEMETRY_MOVING_INTERVAL_MS : TELEMETRY_IDLE_INTERVAL_MS;
+  if (nowMs - lastTelemetryTime < intervalMs) return;
   lastTelemetryTime = nowMs;
 
   int pot = analogRead(POT_PIN);
+  unsigned int s1 = (unsigned int)(motor_speeds[0] + 0.5f);
+  unsigned int s2 = (unsigned int)(motor_speeds[1] + 0.5f);
   int n = snprintf(
     jsonLineBuf,
     sizeof(jsonLineBuf),
-    "{\"type\":\"telemetry\",\"pot\":%d,\"m1\":{\"r\":%ld,\"s\":%.2f,\"m\":%d},\"m2\":{\"r\":%ld,\"s\":%.2f,\"m\":%d}}\n",
+    "{\"type\":\"telemetry\",\"pot\":%d,\"m1\":{\"r\":%ld,\"s\":%u,\"m\":%d},\"m2\":{\"r\":%ld,\"s\":%u,\"m\":%d}}\n",
     pot,
     motors[0].steps_remaining,
-    motor_speeds[0],
+    s1,
     motors[0].is_moving ? 1 : 0,
     motors[1].steps_remaining,
-    motor_speeds[1],
+    s2,
     motors[1].is_moving ? 1 : 0
   );
   if (n <= 0 || n >= (int)sizeof(jsonLineBuf)) return;
@@ -692,13 +695,7 @@ void updateMotors() {
     unsigned long interval = motors[i].step_interval;
     if (elapsed < interval) continue;
 
-    unsigned long dueSteps = elapsed / interval;
-    if (dueSteps > (unsigned long)MAX_STEP_LAG_INTERVALS) {
-      dueSteps = (unsigned long)MAX_STEP_LAG_INTERVALS;
-    }
-    if (dueSteps > (unsigned long)MAX_STEPS_PER_MOTOR_LOOP) {
-      dueSteps = (unsigned long)MAX_STEPS_PER_MOTOR_LOOP;
-    }
+    unsigned long dueSteps = 1;
 
     for (unsigned long s = 0; s < dueSteps && motors[i].steps_remaining != 0; s++) {
       bool new_direction = (motors[i].steps_remaining > 0);
@@ -719,15 +716,13 @@ void updateMotors() {
       }
     }
 
-    motors[i].last_step_time += (unsigned long)(dueSteps * interval);
-    if ((nowUs - motors[i].last_step_time) > (unsigned long)(MAX_STEP_LAG_INTERVALS * interval)) {
-      motors[i].last_step_time = nowUs;
-    }
+    // Reset schedule to wall-clock to avoid burst catch-up pulses (audible stutter).
+    motors[i].last_step_time = nowUs;
   }
   rrStart ^= 1;
 }
 
-#define STEP_PULSE_WIDTH_US 2
+#define STEP_PULSE_WIDTH_US 4
 
 void stepMotor(int motor_index) {
   digitalWrite(MOTOR_PINS[motor_index][0], HIGH);
