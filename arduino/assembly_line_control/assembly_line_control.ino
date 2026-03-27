@@ -459,7 +459,7 @@ void emitCompactTelemetry(unsigned long nowMs) {
   int n = snprintf(
     jsonLineBuf,
     sizeof(jsonLineBuf),
-    "{\"type\":\"telemetry\",\"pot\":%d,\"m1\":{\"r\":%ld,\"s\":%u,\"m\":%d},\"m2\":{\"r\":%ld,\"s\":%u,\"m\":%d}}\n",
+    "T,%d,%ld,%u,%d,%ld,%u,%d\n",
     pot,
     motors[0].steps_remaining,
     s1,

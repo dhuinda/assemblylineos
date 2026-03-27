@@ -487,6 +487,64 @@ class ArduinoController(Node):
                     
             except Exception as e:
                 self.get_logger().error(f'Error in connection monitor: {e}')
+
+    def _publish_pot_sample(self, val, line: str) -> bool:
+        """Parse/publish one potentiometer sample and update debug counters."""
+        self._pot_serial_lines_seen += 1
+        self._pot_last_serial_line = line
+
+        if isinstance(val, str):
+            try:
+                val = float(val.strip())
+            except (TypeError, ValueError):
+                val = None
+        if not isinstance(val, (int, float)):
+            self._pot_parse_errors += 1
+            return False
+
+        raw = max(0.0, min(1023.0, float(val)))
+        if self._pot_smoothed_raw is None:
+            self._pot_smoothed_raw = raw
+        else:
+            self._pot_smoothed_raw = (
+                self._pot_smoothing_alpha * raw
+                + (1.0 - self._pot_smoothing_alpha) * self._pot_smoothed_raw
+            )
+        msg = Float32()
+        msg.data = self._pot_smoothed_raw
+        self.potentiometer_raw_pub.publish(msg)
+
+        self._pot_msg_count += 1
+        if self._pot_first_msg_time is None:
+            self._pot_first_msg_time = time.time()
+        self._pot_last_raw = raw
+        return True
+
+    def _handle_compact_telemetry_line(self, line: str) -> bool:
+        """Parse compact telemetry frame: T,pot,m1_r,m1_s,m1_m,m2_r,m2_s,m2_m"""
+        if not line.startswith('T,'):
+            return False
+
+        parts = line.split(',')
+        if len(parts) != 8:
+            return False
+
+        try:
+            pot = int(parts[1])
+            m1_r = int(parts[2])
+            m1_s = float(parts[3])
+            m1_m = int(parts[4])
+            m2_r = int(parts[5])
+            m2_s = float(parts[6])
+            m2_m = int(parts[7])
+        except (TypeError, ValueError):
+            return False
+
+        self._publish_pot_sample(pot, line)
+        self._apply_compact_motor_status(1, {'r': m1_r, 's': m1_s, 'm': m1_m})
+        self._apply_compact_motor_status(2, {'r': m2_r, 's': m2_s, 'm': m2_m})
+        self._publish_pot_debug()
+        return True
     
     def _read_responses(self):
         """Background thread to read Arduino responses"""
@@ -520,89 +578,43 @@ class ArduinoController(Node):
                         if len(self._serial_recent_lines) > self._serial_recent_max:
                             self._serial_recent_lines.pop(0)
                         handled = False
+                        if self._handle_compact_telemetry_line(line):
+                            handled = True
                         try:
-                            data = json.loads(line)
-                            if not isinstance(data, dict):
-                                raise ValueError('not a dict')
-                            msg_type = data.get('type')
-                            if msg_type == 'telemetry':
-                                self._pot_serial_lines_seen += 1
-                                self._pot_last_serial_line = line
-                                val = data.get('pot')
-                                if isinstance(val, str):
-                                    try:
-                                        val = float(val.strip())
-                                    except (TypeError, ValueError):
-                                        val = None
-                                if isinstance(val, (int, float)):
-                                    raw = max(0.0, min(1023.0, float(val)))
-                                    if self._pot_smoothed_raw is None:
-                                        self._pot_smoothed_raw = raw
-                                    else:
-                                        self._pot_smoothed_raw = (
-                                            self._pot_smoothing_alpha * raw
-                                            + (1.0 - self._pot_smoothing_alpha) * self._pot_smoothed_raw
-                                        )
-                                    msg = Float32()
-                                    msg.data = self._pot_smoothed_raw
-                                    self.potentiometer_raw_pub.publish(msg)
-
-                                    self._pot_msg_count += 1
-                                    if self._pot_first_msg_time is None:
-                                        self._pot_first_msg_time = time.time()
-                                    self._pot_last_raw = raw
-
-                                self._apply_compact_motor_status(1, data.get('m1', {}))
-                                self._apply_compact_motor_status(2, data.get('m2', {}))
-                                handled = True
-                                self._publish_pot_debug()
-                            elif msg_type == 'analog':
-                                self._pot_serial_lines_seen += 1
-                                self._pot_last_serial_line = line
-                                val = data.get('value')
-                                if isinstance(val, str):
-                                    try:
-                                        val = float(val.strip())
-                                    except (TypeError, ValueError):
-                                        val = None
-                                if isinstance(val, (int, float)):
-                                    raw = max(0.0, min(1023.0, float(val)))
-                                    if self._pot_smoothed_raw is None:
-                                        self._pot_smoothed_raw = raw
-                                    else:
-                                        self._pot_smoothed_raw = (
-                                            self._pot_smoothing_alpha * raw
-                                            + (1.0 - self._pot_smoothing_alpha) * self._pot_smoothed_raw
-                                        )
-                                    msg = Float32()
-                                    msg.data = self._pot_smoothed_raw
-                                    self.potentiometer_raw_pub.publish(msg)
-
-                                    self._pot_msg_count += 1
-                                    if self._pot_first_msg_time is None:
-                                        self._pot_first_msg_time = time.time()
-                                    self._pot_last_raw = raw
+                            if not handled:
+                                data = json.loads(line)
+                                if not isinstance(data, dict):
+                                    raise ValueError('not a dict')
+                                msg_type = data.get('type')
+                                if msg_type == 'telemetry':
+                                    self._publish_pot_sample(data.get('pot'), line)
+                                    self._apply_compact_motor_status(1, data.get('m1', {}))
+                                    self._apply_compact_motor_status(2, data.get('m2', {}))
                                     handled = True
-                                else:
-                                    self._pot_parse_errors += 1
-                                    self.get_logger().warn(
-                                        f'[POT] analog msg had unparseable value: {data.get("value")!r}'
-                                    )
+                                    self._publish_pot_debug()
+                                elif msg_type == 'analog':
+                                    if self._publish_pot_sample(data.get('value'), line):
+                                        handled = True
+                                    else:
+                                        self.get_logger().warn(
+                                            f'[POT] analog msg had unparseable value: {data.get("value")!r}'
+                                        )
 
-                                self._publish_pot_debug()
-                            elif msg_type == 'motor_status':
-                                self._serial_motor_status_lines += 1
-                                motor_id = data.get('motor_id')
-                                try:
-                                    if motor_id is not None:
-                                        motor_id = int(float(motor_id))
-                                except (TypeError, ValueError):
-                                    motor_id = None
-                                if motor_id in (1, 2):
-                                    self._apply_arduino_motor_status(motor_id, data)
-                                    handled = True
+                                    self._publish_pot_debug()
+                                elif msg_type == 'motor_status':
+                                    self._serial_motor_status_lines += 1
+                                    motor_id = data.get('motor_id')
+                                    try:
+                                        if motor_id is not None:
+                                            motor_id = int(float(motor_id))
+                                    except (TypeError, ValueError):
+                                        motor_id = None
+                                    if motor_id in (1, 2):
+                                        self._apply_arduino_motor_status(motor_id, data)
+                                        handled = True
                         except (json.JSONDecodeError, TypeError, ValueError):
-                            self._serial_json_errors += 1
+                            if not line.startswith('T,'):
+                                self._serial_json_errors += 1
                         if not handled:
                             self.get_logger().info(f'[Arduino] {line}')
                             self._maybe_publish_serial_log(line)
