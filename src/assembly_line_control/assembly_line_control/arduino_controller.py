@@ -709,9 +709,12 @@ class ArduinoController(Node):
         
         try:
             with self.serial_lock:
-                command_str = json.dumps(command) + '\n'
+                command_str, should_flush = self._encode_wire_command(command)
                 self.serial_port.write(command_str.encode('utf-8'))
-                self.serial_port.flush()
+                # Only flush large/critical JSON payloads (e.g., config), since
+                # per-command flush on high-rate motor updates can add bursty latency.
+                if should_flush:
+                    self.serial_port.flush()
             return True
         except serial.SerialException as e:
             self.get_logger().error(f'Serial write error: {e}')
@@ -720,6 +723,37 @@ class ArduinoController(Node):
         except Exception as e:
             self.get_logger().error(f'Error sending command: {e}')
             return False
+
+    def _encode_wire_command(self, command: dict):
+        """Encode command for serial wire format.
+
+        Uses compact CSV for high-frequency commands to reduce Arduino parse load:
+          - motor: M,<motor_id>,<steps>,<speed>,<stop>\n
+          - relay: R,<relay_id>,<0|1>\n
+          - estop: E\n
+        Falls back to JSON for complex payloads like config.
+        Returns: (wire_string, should_flush)
+        """
+        cmd_type = str(command.get('type', '')).strip().lower()
+
+        if cmd_type == 'motor':
+            motor_id = int(command.get('motor_id', 0))
+            steps = int(command.get('steps', 0))
+            speed = float(command.get('speed', 0.0))
+            stop = 1 if bool(command.get('stop', False)) else 0
+            return f'M,{motor_id},{steps},{speed:.2f},{stop}\n', False
+
+        if cmd_type == 'relay':
+            relay_id = int(command.get('relay_id', 0))
+            state = str(command.get('state', 'off')).strip().lower()
+            on = 1 if state == 'on' else 0
+            return f'R,{relay_id},{on}\n', False
+
+        if cmd_type == 'estop':
+            return 'E\n', True
+
+        # Fallback (including config): keep JSON wire format.
+        return json.dumps(command) + '\n', True
     
     # === MOTOR CONTROL ===
     

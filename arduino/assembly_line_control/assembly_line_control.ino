@@ -92,7 +92,7 @@ size_t serialBufferIndex = 0;
 const unsigned long MIN_STEP_INTERVAL = 200;
 
 // Catch-up stepping (per motor per loop)
-#define MAX_STEPS_PER_MOTOR_LOOP 1
+#define MAX_STEPS_PER_MOTOR_LOOP 4
 // If we fall behind more than this many step intervals, snap schedule to avoid a huge burst
 #define MAX_STEP_LAG_INTERVALS 8
 
@@ -120,6 +120,7 @@ void processEStopCommand(void);
 void processConfigCommandBuf(char* command);
 void processMotorCommandBuf(char* command);
 void processRelayCommandBuf(char* command);
+void processCompactCommandBuf(char* command);
 void updateMotors(void);
 void stepMotor(int motor_index);
 unsigned long calculateStepInterval(float speed_steps_per_sec);
@@ -487,7 +488,7 @@ void readSerialCommands() {
         processCommandBuf(serialBuffer);
         serialBufferIndex = 0;
       }
-      return;
+      continue;
     }
 
     if (serialBufferIndex < (SERIAL_BUFFER_MAX - 1)) {
@@ -496,9 +497,9 @@ void readSerialCommands() {
       serialBufferIndex = 0;
       while (Serial.available() > 0 && budget-- > 0) {
         char c = (char)Serial.read();
-        if (c == '\n' || c == '\r') return;
+        if (c == '\n' || c == '\r') break;
       }
-      return;
+      continue;
     }
   }
 }
@@ -514,6 +515,15 @@ void processCommandBuf(char* command) {
   }
 #endif
 
+  // Fast path for compact CSV commands (used by host for high-rate control):
+  //   M,<motor_id>,<steps>,<speed>,<stop>
+  //   R,<relay_id>,<0|1>
+  //   E
+  if (command[0] != '{') {
+    processCompactCommandBuf(command);
+    return;
+  }
+
   if (strstr(command, "\"type\":\"estop\"") || strstr(command, "\"type\": \"estop\"")) {
     processEStopCommand();
   } else if (strstr(command, "\"type\":\"config\"") || strstr(command, "\"type\": \"config\"")) {
@@ -525,6 +535,91 @@ void processCommandBuf(char* command) {
   } else {
     serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"unknown_command\"}\n");
   }
+}
+
+void processCompactCommandBuf(char* command) {
+  char* saveptr = nullptr;
+  char* type = strtok_r(command, ",", &saveptr);
+  if (!type || !type[0]) {
+    serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"unknown_compact_command\"}\n");
+    return;
+  }
+
+  if (type[0] == 'E') {
+    processEStopCommand();
+    return;
+  }
+
+  if (type[0] == 'R') {
+    char* relayIdTok = strtok_r(nullptr, ",", &saveptr);
+    char* stateTok = strtok_r(nullptr, ",", &saveptr);
+    int relay_id = relayIdTok ? atoi(relayIdTok) : 0;
+    int stateOn = stateTok ? atoi(stateTok) : 0;
+    if (relay_id < 1 || relay_id > 4) {
+      serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"invalid_relay_id\"}\n");
+      return;
+    }
+    int relay_index = relay_id - 1;
+    if (stateOn) {
+      digitalWrite(RELAY_PINS[relay_index], RELAY_ON_LEVEL);
+      relay_states[relay_index] = true;
+    } else {
+      digitalWrite(RELAY_PINS[relay_index], RELAY_OFF_LEVEL);
+      relay_states[relay_index] = false;
+    }
+    return;
+  }
+
+  if (type[0] == 'M') {
+    char* motorIdTok = strtok_r(nullptr, ",", &saveptr);
+    char* stepsTok = strtok_r(nullptr, ",", &saveptr);
+    char* speedTok = strtok_r(nullptr, ",", &saveptr);
+    char* stopTok = strtok_r(nullptr, ",", &saveptr);
+
+    int motor_id = motorIdTok ? atoi(motorIdTok) : 0;
+    if (motor_id < 1 || motor_id > 2) {
+      serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"invalid_motor_id\"}\n");
+      return;
+    }
+
+    int motor_index = motor_id - 1;
+    long steps = stepsTok ? atol(stepsTok) : 0;
+    float speed = speedTok ? (float)atof(speedTok) : 0.0f;
+    bool explicit_stop = stopTok ? (atoi(stopTok) != 0) : false;
+
+    if (speed > 0.0f) {
+      motor_speeds[motor_index] = constrain(speed, 1.0f, 5000.0f);
+      motors[motor_index].step_interval = calculateStepInterval(motor_speeds[motor_index]);
+    }
+
+    if (explicit_stop) {
+      motors[motor_index].steps_remaining = 0;
+      motors[motor_index].is_moving = false;
+      digitalWrite(MOTOR_PINS[motor_index][0], LOW);
+      return;
+    }
+
+    if (steps != 0) {
+      bool was_idle = (!motors[motor_index].is_moving || motors[motor_index].steps_remaining == 0);
+      motors[motor_index].steps_remaining += steps;
+      if (motors[motor_index].steps_remaining == 0) {
+        motors[motor_index].is_moving = false;
+        digitalWrite(MOTOR_PINS[motor_index][0], LOW);
+      } else {
+        motors[motor_index].is_moving = true;
+        if (was_idle) {
+          motors[motor_index].last_step_time = micros();
+        }
+        motors[motor_index].direction = (motors[motor_index].steps_remaining > 0);
+        bool effective_dir = motors[motor_index].direction ^ motor_invert_direction[motor_index];
+        digitalWrite(MOTOR_PINS[motor_index][1], effective_dir ? HIGH : LOW);
+        digitalWrite(LED_BUILTIN, HIGH);
+      }
+    }
+    return;
+  }
+
+  serialTxEnqueueLine("{\"type\":\"error\",\"code\":\"unknown_compact_command\"}\n");
 }
 
 void processEStopCommand() {
@@ -710,15 +805,24 @@ void processMotorCommandBuf(char* command) {
     digitalWrite(MOTOR_PINS[motor_index][0], LOW);
 
   } else if (steps != 0) {
+    bool was_idle = (!motors[motor_index].is_moving || motors[motor_index].steps_remaining == 0);
     motors[motor_index].steps_remaining += steps;
-    motors[motor_index].is_moving = true;
-    motors[motor_index].direction = (steps > 0);
-    motors[motor_index].last_step_time = micros();
+    if (motors[motor_index].steps_remaining == 0) {
+      motors[motor_index].is_moving = false;
+      digitalWrite(MOTOR_PINS[motor_index][0], LOW);
+    } else {
+      motors[motor_index].is_moving = true;
+      if (was_idle) {
+        // Initialize edge timing once when movement starts; avoid re-phasing on
+        // every incremental command, which introduces serial-linked jitter.
+        motors[motor_index].last_step_time = micros();
+      }
 
-    bool effective_dir = motors[motor_index].direction ^ motor_invert_direction[motor_index];
-    digitalWrite(MOTOR_PINS[motor_index][1], effective_dir ? HIGH : LOW);
-
-    digitalWrite(LED_BUILTIN, HIGH);
+      motors[motor_index].direction = (motors[motor_index].steps_remaining > 0);
+      bool effective_dir = motors[motor_index].direction ^ motor_invert_direction[motor_index];
+      digitalWrite(MOTOR_PINS[motor_index][1], effective_dir ? HIGH : LOW);
+      digitalWrite(LED_BUILTIN, HIGH);
+    }
   }
 }
 
@@ -768,7 +872,19 @@ void updateMotors() {
     unsigned long interval = motors[i].step_interval;
     if (elapsed < interval) continue;
 
-    unsigned long dueSteps = 1;
+    unsigned long lagIntervals = elapsed / interval;
+    if (lagIntervals > (unsigned long)MAX_STEP_LAG_INTERVALS) {
+      // If we are far behind, snap near wall-clock to avoid long audible bursts.
+      motors[i].last_step_time = nowUs - interval;
+      lagIntervals = 1;
+    }
+
+    unsigned long dueSteps = lagIntervals;
+    if (dueSteps < 1) dueSteps = 1;
+    if (dueSteps > (unsigned long)MAX_STEPS_PER_MOTOR_LOOP) {
+      dueSteps = (unsigned long)MAX_STEPS_PER_MOTOR_LOOP;
+    }
+    unsigned long stepsTaken = 0;
 
     for (unsigned long s = 0; s < dueSteps && motors[i].steps_remaining != 0; s++) {
       bool new_direction = (motors[i].steps_remaining > 0);
@@ -782,6 +898,7 @@ void updateMotors() {
 
       if (motors[i].steps_remaining > 0) motors[i].steps_remaining--;
       else motors[i].steps_remaining++;
+      stepsTaken++;
 
       if (motors[i].steps_remaining == 0) {
         motors[i].is_moving = false;
@@ -789,8 +906,10 @@ void updateMotors() {
       }
     }
 
-    // Reset schedule to wall-clock to avoid burst catch-up pulses (audible stutter).
-    motors[i].last_step_time = nowUs;
+    // Preserve phase by advancing schedule by executed intervals.
+    if (stepsTaken > 0) {
+      motors[i].last_step_time += (interval * stepsTaken);
+    }
   }
   rrStart ^= 1;
 }
