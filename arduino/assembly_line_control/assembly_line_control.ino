@@ -110,6 +110,9 @@ char jsonLineBuf[JSON_LINE_BUF];
 char serialTxQueue[SERIAL_TX_QUEUE_SIZE];
 size_t serialTxHead = 0;  // Next write position
 size_t serialTxTail = 0;  // Next read position
+bool serialWasConnected = false;
+unsigned long serialLastReadyAnnounceMs = 0;
+const unsigned long READY_ANNOUNCE_INTERVAL_MS = 1000;
 
 void readSerialCommands(void);
 void processCommandBuf(char* command);
@@ -122,6 +125,10 @@ void stepMotor(int motor_index);
 unsigned long calculateStepInterval(float speed_steps_per_sec);
 void drainSerialTxQueue(void);
 void emitCompactTelemetry(unsigned long nowMs);
+void clearSerialTxQueue(void);
+void flushSerialInputBytes(void);
+void handleSerialDisconnectSafety(void);
+void updateSerialLinkState(void);
 
 static void trimBufferInPlace(char* s) {
   if (!s || !*s) return;
@@ -152,6 +159,17 @@ static bool serialTxEnqueueLine(const char* line) {
   return serialTxEnqueue(line, n);
 }
 
+void clearSerialTxQueue(void) {
+  serialTxHead = 0;
+  serialTxTail = 0;
+}
+
+void flushSerialInputBytes(void) {
+  while (Serial.available() > 0) {
+    (void)Serial.read();
+  }
+}
+
 static size_t serialTxUsed(void) {
   if (serialTxHead >= serialTxTail) return serialTxHead - serialTxTail;
   return SERIAL_TX_QUEUE_SIZE - (serialTxTail - serialTxHead);
@@ -177,9 +195,15 @@ void drainSerialTxQueue(void) {
   if (!Serial) return;
   int canWrite = Serial.availableForWrite();
   size_t budget = 0;
-  if (canWrite <= 0) return;
-  budget = (size_t)canWrite;
-  if (budget > (size_t)SERIAL_TX_DRAIN_BUDGET) budget = (size_t)SERIAL_TX_DRAIN_BUDGET;
+  if (canWrite > 0) {
+    budget = (size_t)canWrite;
+    if (budget > (size_t)SERIAL_TX_DRAIN_BUDGET) budget = (size_t)SERIAL_TX_DRAIN_BUDGET;
+  } else {
+    // Some USB CDC stacks intermittently report 0 writable bytes even while
+    // writes still succeed. Keep a tiny fallback so host-side telemetry/probes
+    // do not stall and trigger false "Arduino down" reports.
+    budget = 16;
+  }
 
   while (budget > 0 && serialTxTail != serialTxHead) {
     size_t contiguous = (serialTxHead > serialTxTail)
@@ -357,11 +381,16 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH);
 
   serialBufferIndex = 0;
-
-  serialTxEnqueueLine("{\"type\":\"ready\"}\n");
+  serialWasConnected = (bool)Serial;
+  serialLastReadyAnnounceMs = 0;
+  if (serialWasConnected) {
+    serialTxEnqueueLine("{\"type\":\"ready\"}\n");
+  }
 }
 
 void loop() {
+  updateSerialLinkState();
+
   // Prioritize deterministic stepping cadence.
   updateMotors();
   readSerialCommands();
@@ -373,6 +402,49 @@ void loop() {
   // Non-blocking drain of queued telemetry bytes.
   drainSerialTxQueue();
   updateMotors();
+}
+
+void handleSerialDisconnectSafety(void) {
+  for (int i = 0; i < 2; i++) {
+    motors[i].steps_remaining = 0;
+    motors[i].is_moving = false;
+    digitalWrite(MOTOR_PINS[i][0], LOW);
+  }
+
+  for (int i = 0; i < 4; i++) {
+    relay_states[i] = false;
+    digitalWrite(RELAY_PINS[i], RELAY_OFF_LEVEL);
+  }
+
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void updateSerialLinkState(void) {
+  bool serialConnected = (bool)Serial;
+  unsigned long nowMs = millis();
+
+  if (serialConnected != serialWasConnected) {
+    serialWasConnected = serialConnected;
+    serialBufferIndex = 0;
+    flushSerialInputBytes();
+    clearSerialTxQueue();
+
+    if (serialConnected) {
+      serialTxEnqueueLine("{\"type\":\"ready\",\"event\":\"reconnect\"}\n");
+      serialLastReadyAnnounceMs = nowMs;
+    } else {
+      handleSerialDisconnectSafety();
+    }
+    return;
+  }
+
+  if (!serialConnected) return;
+
+  // Periodic ready beacon while connected in case host missed initial packet.
+  if (nowMs - serialLastReadyAnnounceMs >= READY_ANNOUNCE_INTERVAL_MS) {
+    serialTxEnqueueLine("{\"type\":\"ready\"}\n");
+    serialLastReadyAnnounceMs = nowMs;
+  }
 }
 
 void emitCompactTelemetry(unsigned long nowMs) {
@@ -404,6 +476,7 @@ void emitCompactTelemetry(unsigned long nowMs) {
 }
 
 void readSerialCommands() {
+  if (!Serial) return;
   int budget = SERIAL_READ_BUDGET;
   while (Serial.available() > 0 && budget-- > 0) {
     char inChar = (char)Serial.read();

@@ -332,7 +332,9 @@ class ArduinoController(Node):
                 t0 = time.time()
                 probe = b""
                 got_newline = False
-                while time.time() - t0 < 3.0:
+                # Allow extra time for USB CDC endpoints that come up slowly right
+                # after open/reset (common on SBC hosts under load).
+                while time.time() - t0 < 5.0:
                     try:
                         n = int(self.serial_port.in_waiting or 0)
                     except Exception:
