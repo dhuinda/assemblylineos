@@ -37,7 +37,17 @@ import time
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Float32
+
+# rosbridge web publishers are usually best-effort; default rclpy RELIABLE subscription is incompatible
+# and the callback never runs (no DDS match). See rosbridge_suite ROS 2 QoS issues.
+_BASELINE_SUB_QOS = QoSProfile(
+    depth=10,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    history=HistoryPolicy.KEEP_LAST,
+)
 
 
 def pot_calibration_from_roll_od(
@@ -210,8 +220,11 @@ class PotentiometerSpeedNode(Node):
             Float32, 'potentiometer/raw',
             self.pot_callback, 10)
         self.baseline_speed_sub = self.create_subscription(
-            Float32, self._baseline_topic,
-            self._baseline_speed_callback, 10)
+            Float32,
+            self._baseline_topic,
+            self._baseline_speed_callback,
+            _BASELINE_SUB_QOS,
+        )
 
         self._publish_timer = self.create_timer(self.min_interval, self._timer_publish_setpoint)
 
@@ -241,7 +254,7 @@ class PotentiometerSpeedNode(Node):
         )
         self.get_logger().info(
             f'Potentiometer speed node: speed {self.min_speed}-{self.max_speed} sps, baseline from '
-            f'{self._baseline_topic} (move blocks only), '
+            f'{self._baseline_topic} (move blocks only, best-effort sub for rosbridge), '
             f'motor1={self.publish_motor1}, motor2={self.publish_motor2}, '
             f'publish @{rate_hz:.1f} Hz, deadband={self.speed_deadband}, '
             f'keepalive={self.setpoint_keepalive_sec}s'

@@ -211,7 +211,9 @@ const ROSBridge = {
             name: '/motor_speed/baseline',
             messageType: 'std_msgs/Float32'
         });
-        
+        // Advertise early so ROS graph + potentiometer_speed_node can match before the first motor move.
+        this.motorSpeedBaselinePub.advertise();
+
         this.relayPub = new ROSLIB.Topic({
             ros: this.ros,
             name: '/relay/command',
@@ -698,8 +700,13 @@ const ROSBridge = {
                 speedPub.publish(speedMsg);
             }
 
-            const stepVal = parseInt(steps, 10);
-            const isMove = stepVal !== 0;
+            const stepNum = Number(steps);
+            if (!Number.isFinite(stepNum)) {
+                UIUtils.log('[ROS] Invalid motor steps (not a finite number)', 'error');
+                return false;
+            }
+            const stepInt = Math.trunc(stepNum);
+            const isMove = stepInt !== 0;
             if (
                 isMove
                 && effSpeed !== null
@@ -709,9 +716,9 @@ const ROSBridge = {
                 const baselineMsg = new ROSLIB.Message({ data: parseFloat(effSpeed) });
                 this.motorSpeedBaselinePub.publish(baselineMsg);
             }
-            
+
             // Then send the steps command
-            const msg = new ROSLIB.Message({ data: stepVal });
+            const msg = new ROSLIB.Message({ data: stepInt });
             motorPub.publish(msg);
             return true;
         } catch (error) {
