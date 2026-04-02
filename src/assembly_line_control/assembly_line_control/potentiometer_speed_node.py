@@ -17,6 +17,11 @@ and /motor2/speed (default: off) so the pot does not drive the motor at
 startup until the user subscribes to the setpoint topic in the UI.
 
 Smoothing (EMA) and a speed deadband reduce jitter from ADC noise.
+
+Publishing runs on a timer (publish_rate_hz), not only on pot messages, so
+/motor_speed/setpoint still updates if telemetry is slow or missing: until the
+first pot sample, raw is assumed at pot_raw_min (empty roll). Optional keepalive
+re-publishes periodically so rosbridge/UI keep seeing the topic.
 """
 
 import time
@@ -110,7 +115,7 @@ class PotentiometerSpeedNode(Node):
         # Roll OD vs pot (defaults: 3.5" empty, +13" OD growth at raw 0→1023)
         self.declare_parameter('od_min_inches', 3.5)
         self.declare_parameter('od_max_inches', 16.5)
-        self.declare_parameter('pot_raw_min', 35)
+        self.declare_parameter('pot_raw_min', 0.0)
         self.declare_parameter('pot_raw_max', 1023.0)
         self.declare_parameter('baseline_speed', 200.0)  # steps/sec until first move-block speed
         self.declare_parameter('baseline_speed_motor_id', 1)
@@ -120,6 +125,8 @@ class PotentiometerSpeedNode(Node):
         self.declare_parameter('publish_rate_hz', 15.0)
         self.declare_parameter('smoothing_alpha', 0.6)
         self.declare_parameter('speed_deadband', 15.0)
+        # Re-publish same setpoint at least this often (0 = disable) for live UIs / rosbridge
+        self.declare_parameter('setpoint_keepalive_sec', 1.0)
 
         self.min_speed = self.get_parameter('min_speed').value
         self.max_speed = self.get_parameter('max_speed').value
@@ -153,9 +160,13 @@ class PotentiometerSpeedNode(Node):
         self.min_radius_inches = float(self.get_parameter('min_radius_inches').value)
         self.publish_motor1 = self.get_parameter('publish_motor1').value
         self.publish_motor2 = self.get_parameter('publish_motor2').value
-        self.min_interval = 1.0 / self.get_parameter('publish_rate_hz').value
+        rate_hz = float(self.get_parameter('publish_rate_hz').value)
+        if rate_hz <= 0.0:
+            rate_hz = 15.0
+        self.min_interval = 1.0 / rate_hz
         self.smoothing_alpha = self.get_parameter('smoothing_alpha').value
         self.speed_deadband = self.get_parameter('speed_deadband').value
+        self.setpoint_keepalive_sec = float(self.get_parameter('setpoint_keepalive_sec').value)
 
         self.last_publish_time = 0.0
         self.smoothed_raw = None
@@ -175,13 +186,16 @@ class PotentiometerSpeedNode(Node):
             Float32, 'motor2/speed',
             lambda msg: self._motor_speed_callback(2, msg), 10)
 
+        self._publish_timer = self.create_timer(self.min_interval, self._timer_publish_setpoint)
+
         r_max = od_max / 2.0
         self.get_logger().info(
             f'Potentiometer speed node: OD {od_min}"–{od_max}" (R {self.baseline_radius_inches:.3f}"–{r_max:.3f}"), '
             f'pot {self.pot_raw_min:.0f}–{self.pot_raw_max:.0f}, k={self.inches_per_count:.6f} in/count; '
             f'speed {self.min_speed}-{self.max_speed} sps, baseline from motor{self.baseline_speed_motor_id}/speed, '
             f'motor1={self.publish_motor1}, motor2={self.publish_motor2}, '
-            f'smoothing_alpha={self.smoothing_alpha}, deadband={self.speed_deadband}'
+            f'publish @{rate_hz:.1f} Hz, deadband={self.speed_deadband}, '
+            f'keepalive={self.setpoint_keepalive_sec}s'
         )
 
     def _motor_speed_callback(self, motor_id: int, msg):
@@ -204,8 +218,10 @@ class PotentiometerSpeedNode(Node):
                 self.smoothing_alpha * raw + (1.0 - self.smoothing_alpha) * self.smoothed_raw
             )
 
+    def _compute_setpoint_speed(self) -> float:
+        raw = self.smoothed_raw if self.smoothed_raw is not None else self.pot_raw_min
         radius = map_pot_to_radius(
-            self.smoothed_raw,
+            raw,
             baseline_raw=self.baseline_raw,
             baseline_radius_inches=self.baseline_radius_inches,
             inches_per_count=self.inches_per_count,
@@ -213,7 +229,7 @@ class PotentiometerSpeedNode(Node):
             raw_clamp_min=self.pot_raw_min,
             raw_clamp_max=self.pot_raw_max,
         )
-        speed = map_radius_to_speed(
+        return map_radius_to_speed(
             radius,
             baseline_radius_inches=self.baseline_radius_inches,
             baseline_speed=self.baseline_speed,
@@ -221,15 +237,28 @@ class PotentiometerSpeedNode(Node):
             max_speed=self.max_speed,
         )
 
-        self.get_logger().debug(
-            f'pot raw={self.smoothed_raw:.1f}, radius={radius:.3f} in, speed={speed:.1f} steps/sec'
-        )
-
+    def _timer_publish_setpoint(self):
+        speed = self._compute_setpoint_speed()
         now = time.time()
-        if now - self.last_publish_time < self.min_interval:
-            return
 
-        if self.last_published_speed is not None and abs(speed - self.last_published_speed) < self.speed_deadband:
+        raw_dbg = (
+            f'{self.smoothed_raw:.1f}'
+            if self.smoothed_raw is not None
+            else '— (bootstrap pot_raw_min)'
+        )
+        self.get_logger().debug(f'pot raw={raw_dbg}, speed={speed:.1f} steps/sec')
+
+        need_publish = self.last_published_speed is None
+        if not need_publish and abs(speed - self.last_published_speed) >= self.speed_deadband:
+            need_publish = True
+        if (
+            not need_publish
+            and self.setpoint_keepalive_sec > 0.0
+            and (now - self.last_publish_time) >= self.setpoint_keepalive_sec
+        ):
+            need_publish = True
+
+        if not need_publish:
             return
 
         setpoint_msg = Float32()
