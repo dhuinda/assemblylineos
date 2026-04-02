@@ -10,9 +10,13 @@ Calibration uses roll outer diameter vs pot raw (see od_min_inches, od_max_inche
 pot_raw_min, pot_raw_max). Assumes the dancer/pot is approximately linear in OD.
 
 Baseline speed is taken from the last move block (e.g. M1 at 550 sps) via
-motor1/speed or motor2/speed; that value is the step rate tuned for the empty
-roll (od_min_inches). The param baseline_speed is used until the first such
-message. Publishes to /motor_speed/setpoint. Optionally publishes to /motor1/speed
+motor1/speed or motor2/speed (same Float32 the browser sends before each move).
+The param baseline_speed is used only until the first such message for the
+configured motor(s). The learned baseline is not clamped to max_speed — only the
+published setpoint is. If baseline_speed_motor_id is 0, either motor updates
+the baseline. Self-feedback suppression (deadband vs last setpoint) applies only
+when publish_motorN is true for that motor.
+Publishes to /motor_speed/setpoint. Optionally publishes to /motor1/speed
 and /motor2/speed (default: off) so the pot does not drive the motor at
 startup until the user subscribes to the setpoint topic in the UI.
 
@@ -111,13 +115,15 @@ class PotentiometerSpeedNode(Node):
         super().__init__('potentiometer_speed_node')
 
         self.declare_parameter('min_speed', 1.0)
-        self.declare_parameter('max_speed', 200.0)
+        # Upper clamp on published setpoint only (not on baseline learned from motor{N}/speed)
+        self.declare_parameter('max_speed', 5000.0)
         # Roll OD vs pot (defaults: 3.5" empty, +13" OD growth at raw 0→1023)
         self.declare_parameter('od_min_inches', 3.5)
         self.declare_parameter('od_max_inches', 16.5)
         self.declare_parameter('pot_raw_min', 0.0)
         self.declare_parameter('pot_raw_max', 1023.0)
-        self.declare_parameter('baseline_speed', 200.0)  # steps/sec until first move-block speed
+        self.declare_parameter('baseline_speed', 200.0)  # steps/sec until first motor{N}/speed from a move block
+        # 1 or 2 = only that motor; 0 = last speed message from either motor
         self.declare_parameter('baseline_speed_motor_id', 1)
         self.declare_parameter('min_radius_inches', 1.75)  # floor ≈ empty spool radius (3.5" OD / 2)
         self.declare_parameter('publish_motor1', False)
@@ -155,7 +161,7 @@ class PotentiometerSpeedNode(Node):
 
         self.baseline_speed = float(self.get_parameter('baseline_speed').value)
         self.baseline_speed_motor_id = int(self.get_parameter('baseline_speed_motor_id').value)
-        if self.baseline_speed_motor_id not in (1, 2):
+        if self.baseline_speed_motor_id not in (0, 1, 2):
             self.baseline_speed_motor_id = 1
         self.min_radius_inches = float(self.get_parameter('min_radius_inches').value)
         self.publish_motor1 = self.get_parameter('publish_motor1').value
@@ -192,22 +198,38 @@ class PotentiometerSpeedNode(Node):
         self.get_logger().info(
             f'Potentiometer speed node: OD {od_min}"–{od_max}" (R {self.baseline_radius_inches:.3f}"–{r_max:.3f}"), '
             f'pot {self.pot_raw_min:.0f}–{self.pot_raw_max:.0f}, k={self.inches_per_count:.6f} in/count; '
-            f'speed {self.min_speed}-{self.max_speed} sps, baseline from motor{self.baseline_speed_motor_id}/speed, '
+            f'speed {self.min_speed}-{self.max_speed} sps, baseline from '
+            f'{"motor1|motor2" if self.baseline_speed_motor_id == 0 else f"motor{self.baseline_speed_motor_id}"}/speed, '
             f'motor1={self.publish_motor1}, motor2={self.publish_motor2}, '
             f'publish @{rate_hz:.1f} Hz, deadband={self.speed_deadband}, '
             f'keepalive={self.setpoint_keepalive_sec}s'
         )
 
     def _motor_speed_callback(self, motor_id: int, msg):
-        """Use speed from last move block (e.g. M1 at 550 sps) as baseline for radius scaling."""
-        if motor_id != self.baseline_speed_motor_id:
+        """Use speed from last move block (Float32 on motor{N}/speed) as baseline for radius scaling."""
+        mid = self.baseline_speed_motor_id
+        if mid not in (0, motor_id):
             return
-        speed = max(self.min_speed, min(self.max_speed, float(msg.data)))
-        # Do not overwrite baseline with our own published value (avoid feedback)
-        if self.last_published_speed is not None and abs(speed - self.last_published_speed) <= self.speed_deadband:
+        try:
+            speed = float(msg.data)
+        except (TypeError, ValueError):
+            return
+        speed = max(self.min_speed, speed)
+        # Only treat /motor_speed/setpoint similarity as feedback when we also publish to this motor's /speed
+        self_publishing_this_motor = (
+            (motor_id == 1 and self.publish_motor1)
+            or (motor_id == 2 and self.publish_motor2)
+        )
+        if (
+            self_publishing_this_motor
+            and self.last_published_speed is not None
+            and abs(speed - self.last_published_speed) <= self.speed_deadband
+        ):
             return
         self.baseline_speed = speed
-        self.get_logger().debug(f'Baseline speed set to {self.baseline_speed:.1f} sps from motor{motor_id}/speed')
+        self.get_logger().debug(
+            f'Baseline speed set to {self.baseline_speed:.1f} sps from motor{motor_id}/speed (move block / command)'
+        )
 
     def pot_callback(self, msg):
         raw = max(self.pot_raw_min, min(self.pot_raw_max, float(msg.data)))

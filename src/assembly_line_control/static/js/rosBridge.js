@@ -679,9 +679,14 @@ const ROSBridge = {
         }
         
         try {
-            // If speed is provided, set it first
-            if (speed !== null && speedPub) {
-                const speedMsg = new ROSLIB.Message({ data: parseFloat(speed) });
+            // Always publish Float32 to motor{N}/speed when possible so ROS nodes (e.g. potentiometer_speed_node)
+            // can learn baseline from the same message as the move block, even if caller passed speed=null.
+            let effSpeed = speed;
+            if ((effSpeed === null || effSpeed === undefined) && typeof MotorSpeedManager !== 'undefined') {
+                effSpeed = MotorSpeedManager.getSpeed(motorId);
+            }
+            if (effSpeed !== null && effSpeed !== undefined && speedPub) {
+                const speedMsg = new ROSLIB.Message({ data: parseFloat(effSpeed) });
                 speedPub.publish(speedMsg);
             }
             
