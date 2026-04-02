@@ -7,7 +7,8 @@ Subscribes to /potentiometer/raw (from Arduino via arduino_controller),
 scales motor speed by roll radius so material surface speed stays constant.
 
 Calibration uses roll outer diameter vs pot raw (see od_min_inches, od_max_inches,
-pot_raw_min, pot_raw_max). Assumes the dancer/pot is approximately linear in OD.
+pot_raw_min, pot_raw_max). pot_raw_min is the ADC at the empty 3.5" OD roll
+(default 40). Assumes the dancer/pot is approximately linear in OD.
 
 Baseline speed is taken from the last move block (e.g. M1 at 550 sps) via
 motor1/speed or motor2/speed (same Float32 the browser sends before each move).
@@ -120,7 +121,7 @@ class PotentiometerSpeedNode(Node):
         # Roll OD vs pot (defaults: 3.5" empty, +13" OD growth at raw 0→1023)
         self.declare_parameter('od_min_inches', 3.5)
         self.declare_parameter('od_max_inches', 16.5)
-        self.declare_parameter('pot_raw_min', 0.0)
+        self.declare_parameter('pot_raw_min', 40.0)  # ADC at empty 3.5" OD roll (mechanical zero)
         self.declare_parameter('pot_raw_max', 1023.0)
         self.declare_parameter('baseline_speed', 200.0)  # steps/sec until first motor{N}/speed from a move block
         # 1 or 2 = only that motor; 0 = last speed message from either motor
