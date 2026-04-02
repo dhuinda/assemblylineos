@@ -10,7 +10,9 @@ Calibration: empty roll OD od_min at pot_raw_min (default 40); full roll is
 od_min + roll_od_growth_inches (default +13" OD) at pot_raw_max (1023).
 Radius growth is half the OD growth, spread over (pot_raw_max - pot_raw_min)
 ADC counts — not over the full 0–1023 range unless pot_raw_min is 0.
-Assumes the dancer/pot is approximately linear in OD.
+Assumes the dancer/pot is approximately linear in OD. The 1/R speed law uses
+R0 = outer radius at pot_raw_min after min_radius_inches clamp (same as the
+pot→radius map), not od_min/2 when that affine value lies below the floor.
 
 Baseline speed is taken from the last move block (e.g. M1 at 550 sps) via
 motor1/speed or motor2/speed (same Float32 the browser sends before each move).
@@ -31,6 +33,7 @@ first pot sample, raw is assumed at pot_raw_min (empty roll). Optional keepalive
 re-publishes periodically so rosbridge/UI keep seeing the topic.
 """
 
+import math
 import time
 
 import rclpy
@@ -103,7 +106,9 @@ def map_radius_to_speed(
     less as the roll grows).
 
     where:
-      - R0 is baseline_radius_inches (outer radius at baseline_speed, empty roll)
+      - R0 is the reference outer radius at pot_raw_min (after min_radius clamp),
+        same as map_pot_to_radius(..., pot_raw_min) — not raw od_min/2 if that
+        is below min_radius_inches.
       - R is current radius_inches
     """
     if radius_inches <= 0.0:
@@ -223,10 +228,18 @@ class PotentiometerSpeedNode(Node):
             pot_raw_max, self.baseline_raw, self.baseline_radius_inches, self.inches_per_count,
             self.min_radius_inches, self.pot_raw_min, self.pot_raw_max,
         )
+        # Speed law R0 must match the radius we actually use at empty-roll ADC (after min_radius floor).
+        self.reference_radius_inches = r_at_min
+        if self.baseline_radius_inches + 1e-9 < self.min_radius_inches:
+            self.get_logger().warn(
+                f'od_min/2 ({self.baseline_radius_inches:g}") is below min_radius_inches ({self.min_radius_inches:g}"); '
+                f'using reference R0={self.reference_radius_inches:g}" for 1/R speed (fix od_min or min_radius)'
+            )
         self.get_logger().info(
             f'Pot calibration: pot {self.pot_raw_min:.0f}–{self.pot_raw_max:.0f} (span {adc_span:.0f} counts) '
             f'=> OD {od_min}"–{od_max}" (+{od_max - od_min:g}" OD), '
             f'outer R {r_at_min:.3f}"–{r_at_max:.3f}" (+{dradius:g}" radius); '
+            f'1/R R0={self.reference_radius_inches:.3f}"; '
             f'k={self.inches_per_count:.6f} in/ADC; 1/R exp={self.inverse_radius_exponent:g}'
         )
         self.get_logger().info(
@@ -246,7 +259,10 @@ class PotentiometerSpeedNode(Node):
             speed = float(msg.data)
         except (TypeError, ValueError):
             return
-        speed = max(self.min_speed, speed)
+        # Do not coerce stop/invalid (0) to min_speed — that would set baseline_speed to 1 sps and
+        # collapse every scaled setpoint to the floor.
+        if not math.isfinite(speed) or speed < self.min_speed:
+            return
         # Only treat /motor_speed/setpoint similarity as feedback when we also publish to this motor's /speed
         self_publishing_this_motor = (
             (motor_id == 1 and self.publish_motor1)
@@ -258,7 +274,7 @@ class PotentiometerSpeedNode(Node):
             and abs(speed - self.last_published_speed) <= self.speed_deadband
         ):
             return
-        self.baseline_speed = speed
+        self.baseline_speed = min(self.max_speed, speed)
         self.get_logger().debug(
             f'Baseline speed set to {self.baseline_speed:.1f} sps from motor{motor_id}/speed (move block / command)'
         )
@@ -285,7 +301,7 @@ class PotentiometerSpeedNode(Node):
         )
         return map_radius_to_speed(
             radius,
-            baseline_radius_inches=self.baseline_radius_inches,
+            baseline_radius_inches=self.reference_radius_inches,
             baseline_speed=self.baseline_speed,
             min_speed=self.min_speed,
             max_speed=self.max_speed,
