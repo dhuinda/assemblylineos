@@ -110,7 +110,7 @@ class PotentiometerSpeedNode(Node):
         # Roll OD vs pot (defaults: 3.5" empty, +13" OD growth at raw 0→1023)
         self.declare_parameter('od_min_inches', 3.5)
         self.declare_parameter('od_max_inches', 16.5)
-        self.declare_parameter('pot_raw_min', 40)
+        self.declare_parameter('pot_raw_min', 35)
         self.declare_parameter('pot_raw_max', 1023.0)
         self.declare_parameter('baseline_speed', 200.0)  # steps/sec until first move-block speed
         self.declare_parameter('baseline_speed_motor_id', 1)
