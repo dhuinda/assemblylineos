@@ -10,6 +10,8 @@ const ROSBridge = {
     motor2Pub: null,
     motor1SpeedPub: null,
     motor2SpeedPub: null,
+    /** Float32 publisher: potentiometer_speed_node baseline (only on non-zero motor moves) */
+    motorSpeedBaselinePub: null,
     relayPub: null,
     sequencePub: null,
     estopPub: null,
@@ -201,6 +203,12 @@ const ROSBridge = {
         this.motor2SpeedPub = new ROSLIB.Topic({
             ros: this.ros,
             name: '/motor2/speed',
+            messageType: 'std_msgs/Float32'
+        });
+
+        this.motorSpeedBaselinePub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/motor_speed/baseline',
             messageType: 'std_msgs/Float32'
         });
         
@@ -679,8 +687,8 @@ const ROSBridge = {
         }
         
         try {
-            // Always publish Float32 to motor{N}/speed when possible so ROS nodes (e.g. potentiometer_speed_node)
-            // can learn baseline from the same message as the move block, even if caller passed speed=null.
+            // Always publish Float32 to motor{N}/speed for Arduino / status. Pot baseline is separate
+            // (/motor_speed/baseline) so "follow setpoint" republishing motor speed does not overwrite it.
             let effSpeed = speed;
             if ((effSpeed === null || effSpeed === undefined) && typeof MotorSpeedManager !== 'undefined') {
                 effSpeed = MotorSpeedManager.getSpeed(motorId);
@@ -689,9 +697,21 @@ const ROSBridge = {
                 const speedMsg = new ROSLIB.Message({ data: parseFloat(effSpeed) });
                 speedPub.publish(speedMsg);
             }
+
+            const stepVal = parseInt(steps, 10);
+            const isMove = stepVal !== 0;
+            if (
+                isMove
+                && effSpeed !== null
+                && effSpeed !== undefined
+                && this.motorSpeedBaselinePub
+            ) {
+                const baselineMsg = new ROSLIB.Message({ data: parseFloat(effSpeed) });
+                this.motorSpeedBaselinePub.publish(baselineMsg);
+            }
             
             // Then send the steps command
-            const msg = new ROSLIB.Message({ data: parseInt(steps) });
+            const msg = new ROSLIB.Message({ data: stepVal });
             motorPub.publish(msg);
             return true;
         } catch (error) {
