@@ -78,13 +78,18 @@ def generate_launch_description():
         parameters=[],
     )
     
-    # Optional: map potentiometer to motor speed (publish to /motor_speed/setpoint and /motorN/speed)
+    # Pot → roll OD (dancer): 3.5" empty at pot≈0, +13" OD at pot→1023; motor speed ∝ 1/R for constant web speed
     potentiometer_speed_node = Node(
         package='assembly_line_control',
         executable='potentiometer_speed_node',
         name='potentiometer_speed_node',
         output='screen',
-        parameters=[],
+        parameters=[{
+            'od_min_inches': 3.5,
+            'od_max_inches': 16.5,
+            'pot_raw_min': 0.0,
+            'pot_raw_max': 1023.0,
+        }],
     )
     
     return LaunchDescription([

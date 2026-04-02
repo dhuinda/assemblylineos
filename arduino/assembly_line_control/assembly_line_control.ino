@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <mbed.h>
 
 // Motor pin definitions (2 stepper motors) - can be reconfigured via serial
 // Format: {STEP_PIN, DIR_PIN}
@@ -65,11 +66,11 @@ int numCustomPins = 0;
 
 // Motor state structure
 struct MotorState {
-  long steps_remaining;
-  unsigned long step_interval;
-  unsigned long last_step_time;
-  bool is_moving;
-  bool direction;
+  volatile long steps_remaining;
+  volatile uint16_t step_ticks;
+  volatile uint16_t tick_countdown;
+  volatile bool is_moving;
+  volatile bool direction;
 };
 
 MotorState motors[2];
@@ -90,11 +91,8 @@ size_t serialBufferIndex = 0;
 #define DEBUG_SERIAL 0
 
 const unsigned long MIN_STEP_INTERVAL = 200;
-
-// Catch-up stepping (per motor per loop). Keep this >= expected max_sps / loop_hz.
-#define MAX_STEPS_PER_MOTOR_LOOP 8
-// If we fall behind more than this many step intervals, snap schedule to avoid a huge burst
-#define MAX_STEP_LAG_INTERVALS 8
+const uint32_t MOTOR_TIMER_TICK_US = 50;
+mbed::Ticker motorStepTicker;
 
 // Reject clearly invalid configured pins (board-dependent; Giga uses many numbers)
 #define PIN_NUMBER_MAX 255
@@ -123,6 +121,8 @@ void processRelayCommandBuf(char* command);
 void updateMotors(void);
 void stepMotor(int motor_index);
 unsigned long calculateStepInterval(float speed_steps_per_sec);
+uint16_t calculateStepTicks(float speed_steps_per_sec);
+void motorStepTickerISR(void);
 void drainSerialTxQueue(void);
 void emitCompactTelemetry(unsigned long nowMs);
 void clearSerialTxQueue(void);
@@ -357,8 +357,8 @@ void setup() {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
     motors[i].direction = true;
-    motors[i].last_step_time = 0;
-    motors[i].step_interval = calculateStepInterval(motor_speeds[i]);
+    motors[i].step_ticks = calculateStepTicks(motor_speeds[i]);
+    motors[i].tick_countdown = motors[i].step_ticks;
   }
 
   for (int i = 0; i < 4; i++) {
@@ -386,28 +386,32 @@ void setup() {
   if (serialWasConnected) {
     serialTxEnqueueLine("{\"type\":\"ready\"}\n");
   }
+
+  motorStepTicker.attach_us(motorStepTickerISR, MOTOR_TIMER_TICK_US);
 }
 
 void loop() {
   updateSerialLinkState();
 
-  // Prioritize deterministic stepping cadence.
-  updateMotors();
   readSerialCommands();
-  updateMotors();
 
   unsigned long now = millis();
   emitCompactTelemetry(now);
 
   // Non-blocking drain of queued telemetry bytes.
   drainSerialTxQueue();
-  updateMotors();
 }
 
 void handleSerialDisconnectSafety(void) {
+  noInterrupts();
   for (int i = 0; i < 2; i++) {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
+    motors[i].tick_countdown = motors[i].step_ticks;
+  }
+  interrupts();
+
+  for (int i = 0; i < 2; i++) {
     digitalWrite(MOTOR_PINS[i][0], LOW);
   }
 
@@ -448,7 +452,18 @@ void updateSerialLinkState(void) {
 }
 
 void emitCompactTelemetry(unsigned long nowMs) {
-  bool anyMoving = motors[0].is_moving || motors[1].is_moving;
+  bool anyMoving;
+  long m1Remaining;
+  long m2Remaining;
+  bool m1Moving;
+  bool m2Moving;
+  noInterrupts();
+  m1Remaining = motors[0].steps_remaining;
+  m2Remaining = motors[1].steps_remaining;
+  m1Moving = motors[0].is_moving;
+  m2Moving = motors[1].is_moving;
+  interrupts();
+  anyMoving = m1Moving || m2Moving;
   unsigned long intervalMs = anyMoving ? TELEMETRY_MOVING_INTERVAL_MS : TELEMETRY_IDLE_INTERVAL_MS;
   if (nowMs - lastTelemetryTime < intervalMs) return;
   lastTelemetryTime = nowMs;
@@ -461,12 +476,12 @@ void emitCompactTelemetry(unsigned long nowMs) {
     sizeof(jsonLineBuf),
     "T,%d,%ld,%u,%d,%ld,%u,%d\n",
     pot,
-    motors[0].steps_remaining,
+    m1Remaining,
     s1,
-    motors[0].is_moving ? 1 : 0,
-    motors[1].steps_remaining,
+    m1Moving ? 1 : 0,
+    m2Remaining,
     s2,
-    motors[1].is_moving ? 1 : 0
+    m2Moving ? 1 : 0
   );
   if (n <= 0 || n >= (int)sizeof(jsonLineBuf)) return;
 
@@ -528,10 +543,13 @@ void processCommandBuf(char* command) {
 }
 
 void processEStopCommand() {
+  noInterrupts();
   for (int i = 0; i < 2; i++) {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
+    motors[i].tick_countdown = motors[i].step_ticks;
   }
+  interrupts();
 
   for (int i = 0; i < 4; i++) {
     relay_states[i] = false;
@@ -543,9 +561,15 @@ void processEStopCommand() {
 }
 
 void processConfigCommandBuf(char* command) {
+  noInterrupts();
   for (int i = 0; i < 2; i++) {
     motors[i].steps_remaining = 0;
     motors[i].is_moving = false;
+    motors[i].tick_countdown = motors[i].step_ticks;
+  }
+  interrupts();
+
+  for (int i = 0; i < 2; i++) {
     digitalWrite(MOTOR_PINS[i][0], LOW);
   }
 
@@ -582,7 +606,10 @@ void processConfigCommandBuf(char* command) {
         pinMode(MOTOR_PINS[motorIndex][1], OUTPUT);
         digitalWrite(MOTOR_PINS[motorIndex][0], LOW);
         digitalWrite(MOTOR_PINS[motorIndex][1], LOW);
-        motors[motorIndex].step_interval = calculateStepInterval(motor_speeds[motorIndex]);
+        noInterrupts();
+        motors[motorIndex].step_ticks = calculateStepTicks(motor_speeds[motorIndex]);
+        motors[motorIndex].tick_countdown = motors[motorIndex].step_ticks;
+        interrupts();
 
       }
     }
@@ -699,23 +726,36 @@ void processMotorCommandBuf(char* command) {
   float speed = extractFloatJson(command, "speed");
   if (speed > 0) {
     motor_speeds[motor_index] = constrain(speed, 1.0f, 5000.0f);
-    motors[motor_index].step_interval = calculateStepInterval(motor_speeds[motor_index]);
+    noInterrupts();
+    motors[motor_index].step_ticks = calculateStepTicks(motor_speeds[motor_index]);
+    if (motors[motor_index].tick_countdown > motors[motor_index].step_ticks) {
+      motors[motor_index].tick_countdown = motors[motor_index].step_ticks;
+    }
+    interrupts();
   }
 
   bool explicit_stop = jsonHasLiteral(command, "\"stop\":true") || jsonHasLiteral(command, "\"stop\": true");
 
   if (explicit_stop) {
+    noInterrupts();
     motors[motor_index].steps_remaining = 0;
     motors[motor_index].is_moving = false;
+    motors[motor_index].tick_countdown = motors[motor_index].step_ticks;
+    interrupts();
     digitalWrite(MOTOR_PINS[motor_index][0], LOW);
 
   } else if (steps != 0) {
+    noInterrupts();
     motors[motor_index].steps_remaining += steps;
-    motors[motor_index].is_moving = true;
-    motors[motor_index].direction = (steps > 0);
-    motors[motor_index].last_step_time = micros();
-
+    bool moving = (motors[motor_index].steps_remaining != 0);
+    motors[motor_index].is_moving = moving;
+    if (moving) {
+      motors[motor_index].direction = (motors[motor_index].steps_remaining > 0);
+      motors[motor_index].tick_countdown = 1;
+    }
     bool effective_dir = motors[motor_index].direction ^ motor_invert_direction[motor_index];
+    interrupts();
+
     digitalWrite(MOTOR_PINS[motor_index][1], effective_dir ? HIGH : LOW);
 
     digitalWrite(LED_BUILTIN, HIGH);
@@ -756,61 +796,7 @@ void processRelayCommandBuf(char* command) {
 }
 
 void updateMotors() {
-  static int rrStart = 0;
-  for (int pass = 0; pass < 2; pass++) {
-    int i = (rrStart + pass) & 1;
-    if (!motors[i].is_moving || motors[i].steps_remaining == 0) {
-      continue;
-    }
-
-    unsigned long nowUs = micros();
-    unsigned long elapsed = nowUs - motors[i].last_step_time;
-    unsigned long interval = motors[i].step_interval;
-    if (elapsed < interval) continue;
-
-    // Use elapsed/interval for deterministic timing instead of wall-clock reset.
-    // This avoids an artificial ceiling near loop frequency (e.g. ~1k sps).
-    unsigned long dueSteps = elapsed / interval;
-    if (dueSteps == 0) dueSteps = 1;
-    if (dueSteps > MAX_STEP_LAG_INTERVALS) dueSteps = MAX_STEP_LAG_INTERVALS;
-    if (dueSteps > MAX_STEPS_PER_MOTOR_LOOP) dueSteps = MAX_STEPS_PER_MOTOR_LOOP;
-
-    unsigned long stepsTaken = 0;
-    for (unsigned long s = 0; s < dueSteps && motors[i].steps_remaining != 0; s++) {
-      bool new_direction = (motors[i].steps_remaining > 0);
-      if (motors[i].direction != new_direction) {
-        motors[i].direction = new_direction;
-        bool effective_dir = motors[i].direction ^ motor_invert_direction[i];
-        digitalWrite(MOTOR_PINS[i][1], effective_dir ? HIGH : LOW);
-      }
-
-      stepMotor(i);
-
-      if (motors[i].steps_remaining > 0) motors[i].steps_remaining--;
-      else motors[i].steps_remaining++;
-
-      if (motors[i].steps_remaining == 0) {
-        motors[i].is_moving = false;
-        digitalWrite(MOTOR_PINS[i][0], LOW);
-      }
-      stepsTaken++;
-    }
-
-    // Advance by executed intervals to preserve phase and reduce jitter.
-    if (stepsTaken > 0) {
-      motors[i].last_step_time += (stepsTaken * interval);
-    } else {
-      motors[i].last_step_time = nowUs;
-    }
-
-    // If we are still far behind, snap closer to wall-clock to prevent huge bursts.
-    unsigned long lag = nowUs - motors[i].last_step_time;
-    unsigned long maxLag = interval * MAX_STEP_LAG_INTERVALS;
-    if (lag > maxLag) {
-      motors[i].last_step_time = nowUs - maxLag;
-    }
-  }
-  rrStart ^= 1;
+  // Timer ISR now drives stepping cadence; keep this function for compatibility.
 }
 
 #define STEP_PULSE_WIDTH_US 4
@@ -833,4 +819,49 @@ unsigned long calculateStepInterval(float speed_steps_per_sec) {
   }
 
   return interval;
+}
+
+uint16_t calculateStepTicks(float speed_steps_per_sec) {
+  unsigned long intervalUs = calculateStepInterval(speed_steps_per_sec);
+  uint16_t ticks = (uint16_t)((intervalUs + (MOTOR_TIMER_TICK_US / 2)) / MOTOR_TIMER_TICK_US);
+  if (ticks == 0) ticks = 1;
+  return ticks;
+}
+
+void motorStepTickerISR(void) {
+  for (int i = 0; i < 2; i++) {
+    if (!motors[i].is_moving) continue;
+    long remaining = motors[i].steps_remaining;
+    if (remaining == 0) {
+      motors[i].is_moving = false;
+      continue;
+    }
+
+    if (motors[i].tick_countdown > 1) {
+      motors[i].tick_countdown--;
+      continue;
+    }
+
+    bool newDirection = (remaining > 0);
+    if (motors[i].direction != newDirection) {
+      motors[i].direction = newDirection;
+      bool effectiveDir = motors[i].direction ^ motor_invert_direction[i];
+      digitalWrite(MOTOR_PINS[i][1], effectiveDir ? HIGH : LOW);
+    }
+
+    digitalWrite(MOTOR_PINS[i][0], HIGH);
+    delayMicroseconds(STEP_PULSE_WIDTH_US);
+    digitalWrite(MOTOR_PINS[i][0], LOW);
+
+    if (remaining > 0) remaining--;
+    else remaining++;
+    motors[i].steps_remaining = remaining;
+
+    if (remaining == 0) {
+      motors[i].is_moving = false;
+      motors[i].tick_countdown = motors[i].step_ticks;
+    } else {
+      motors[i].tick_countdown = motors[i].step_ticks;
+    }
+  }
 }
