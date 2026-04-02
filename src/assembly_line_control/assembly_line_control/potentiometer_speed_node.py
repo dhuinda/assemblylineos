@@ -6,9 +6,11 @@ Potentiometer Speed Node for Assembly Line OS
 Subscribes to /potentiometer/raw (from Arduino via arduino_controller),
 scales motor speed by roll radius so material surface speed stays constant.
 
-Calibration uses roll outer diameter vs pot raw (see od_min_inches, od_max_inches,
-pot_raw_min, pot_raw_max). pot_raw_min is the ADC at the empty 3.5" OD roll
-(default 40). Assumes the dancer/pot is approximately linear in OD.
+Calibration: empty roll OD od_min at pot_raw_min (default 40); full roll is
+od_min + roll_od_growth_inches (default +13" OD) at pot_raw_max (1023).
+Radius growth is half the OD growth, spread over (pot_raw_max - pot_raw_min)
+ADC counts — not over the full 0–1023 range unless pot_raw_min is 0.
+Assumes the dancer/pot is approximately linear in OD.
 
 Baseline speed is taken from the last move block (e.g. M1 at 550 sps) via
 motor1/speed or motor2/speed (same Float32 the browser sends before each move).
@@ -82,6 +84,7 @@ def map_radius_to_speed(
     baseline_speed: float,
     min_speed: float,
     max_speed: float,
+    inverse_radius_exponent: float = 1.0,
 ) -> float:
     """
     Map roll radius to motor speed (steps/sec) so that surface speed
@@ -94,7 +97,10 @@ def map_radius_to_speed(
     Since motor step rate is proportional to omega, we scale speed
     inversely with radius:
 
-        speed(R) = baseline_speed * (R0 / R)
+        speed(R) = baseline_speed * (R0 / R) ** inverse_radius_exponent
+
+    exponent 1 = constant web speed; values in (0,1) soften taper (motor slows
+    less as the roll grows).
 
     where:
       - R0 is baseline_radius_inches (outer radius at baseline_speed, empty roll)
@@ -104,7 +110,11 @@ def map_radius_to_speed(
         # Should be prevented by min_radius_inches, but guard anyway.
         radius_inches = baseline_radius_inches
 
-    speed = baseline_speed * (baseline_radius_inches / radius_inches)
+    ratio = baseline_radius_inches / radius_inches
+    exp = float(inverse_radius_exponent)
+    if exp <= 0.0:
+        exp = 1.0
+    speed = baseline_speed * (ratio ** exp)
     # Clamp within configured min/max to avoid extreme values.
     return max(min_speed, min(max_speed, speed))
 
@@ -118,11 +128,13 @@ class PotentiometerSpeedNode(Node):
         self.declare_parameter('min_speed', 1.0)
         # Upper clamp on published setpoint only (not on baseline learned from motor{N}/speed)
         self.declare_parameter('max_speed', 5000.0)
-        # Roll OD vs pot (defaults: 3.5" empty, +13" OD growth at raw 0→1023)
+        # Roll OD vs pot: od_min at pot_raw_min; od_max = od_min + roll_od_growth_inches
+        # (set od_max_inches > od_min to override the sum).
         self.declare_parameter('od_min_inches', 3.5)
-        self.declare_parameter('od_max_inches', 16.5)
+        self.declare_parameter('roll_od_growth_inches', 13.0)  # added to OD from empty to full roll
+        self.declare_parameter('od_max_inches', 0.0)  # 0 or <= od_min => od_min + roll_od_growth_inches
         self.declare_parameter('pot_raw_min', 40.0)  # ADC at empty 3.5" OD roll (mechanical zero)
-        self.declare_parameter('pot_raw_max', 1023.0)
+        self.declare_parameter('pot_raw_max', 1023.0)  # ADC when OD has grown by roll_od_growth_inches
         self.declare_parameter('baseline_speed', 200.0)  # steps/sec until first motor{N}/speed from a move block
         # 1 or 2 = only that motor; 0 = last speed message from either motor
         self.declare_parameter('baseline_speed_motor_id', 1)
@@ -134,19 +146,24 @@ class PotentiometerSpeedNode(Node):
         self.declare_parameter('speed_deadband', 15.0)
         # Re-publish same setpoint at least this often (0 = disable) for live UIs / rosbridge
         self.declare_parameter('setpoint_keepalive_sec', 1.0)
+        # 1.0 = speed ∝ 1/R; e.g. 0.85 slows the motor less as radius grows
+        self.declare_parameter('inverse_radius_exponent', 1.0)
 
         self.min_speed = self.get_parameter('min_speed').value
         self.max_speed = self.get_parameter('max_speed').value
         od_min = float(self.get_parameter('od_min_inches').value)
         od_max = float(self.get_parameter('od_max_inches').value)
+        roll_od_growth = float(self.get_parameter('roll_od_growth_inches').value)
         pot_raw_min = float(self.get_parameter('pot_raw_min').value)
         pot_raw_max = float(self.get_parameter('pot_raw_max').value)
 
-        if od_max <= od_min:
+        if od_max <= od_min + 1e-9:
+            od_max = od_min + max(roll_od_growth, 1e-6)
+        elif roll_od_growth > 0.0 and abs(od_max - (od_min + roll_od_growth)) > 0.02:
             self.get_logger().warn(
-                f'od_max_inches ({od_max}) must exceed od_min_inches ({od_min}); using od_min + 13'
+                f'od_max_inches ({od_max}) != od_min + roll_od_growth_inches ({od_min + roll_od_growth}); '
+                f'using declared od_max_inches'
             )
-            od_max = od_min + 13.0
         raw_span = pot_raw_max - pot_raw_min
         if raw_span <= 0.0:
             self.get_logger().warn(
@@ -174,6 +191,7 @@ class PotentiometerSpeedNode(Node):
         self.smoothing_alpha = self.get_parameter('smoothing_alpha').value
         self.speed_deadband = self.get_parameter('speed_deadband').value
         self.setpoint_keepalive_sec = float(self.get_parameter('setpoint_keepalive_sec').value)
+        self.inverse_radius_exponent = float(self.get_parameter('inverse_radius_exponent').value)
 
         self.last_publish_time = 0.0
         self.smoothed_raw = None
@@ -195,11 +213,24 @@ class PotentiometerSpeedNode(Node):
 
         self._publish_timer = self.create_timer(self.min_interval, self._timer_publish_setpoint)
 
-        r_max = od_max / 2.0
+        adc_span = pot_raw_max - pot_raw_min
+        dradius = (od_max - od_min) / 2.0
+        r_at_min = map_pot_to_radius(
+            pot_raw_min, self.baseline_raw, self.baseline_radius_inches, self.inches_per_count,
+            self.min_radius_inches, self.pot_raw_min, self.pot_raw_max,
+        )
+        r_at_max = map_pot_to_radius(
+            pot_raw_max, self.baseline_raw, self.baseline_radius_inches, self.inches_per_count,
+            self.min_radius_inches, self.pot_raw_min, self.pot_raw_max,
+        )
         self.get_logger().info(
-            f'Potentiometer speed node: OD {od_min}"–{od_max}" (R {self.baseline_radius_inches:.3f}"–{r_max:.3f}"), '
-            f'pot {self.pot_raw_min:.0f}–{self.pot_raw_max:.0f}, k={self.inches_per_count:.6f} in/count; '
-            f'speed {self.min_speed}-{self.max_speed} sps, baseline from '
+            f'Pot calibration: pot {self.pot_raw_min:.0f}–{self.pot_raw_max:.0f} (span {adc_span:.0f} counts) '
+            f'=> OD {od_min}"–{od_max}" (+{od_max - od_min:g}" OD), '
+            f'outer R {r_at_min:.3f}"–{r_at_max:.3f}" (+{dradius:g}" radius); '
+            f'k={self.inches_per_count:.6f} in/ADC; 1/R exp={self.inverse_radius_exponent:g}'
+        )
+        self.get_logger().info(
+            f'Potentiometer speed node: speed {self.min_speed}-{self.max_speed} sps, baseline from '
             f'{"motor1|motor2" if self.baseline_speed_motor_id == 0 else f"motor{self.baseline_speed_motor_id}"}/speed, '
             f'motor1={self.publish_motor1}, motor2={self.publish_motor2}, '
             f'publish @{rate_hz:.1f} Hz, deadband={self.speed_deadband}, '
@@ -258,6 +289,7 @@ class PotentiometerSpeedNode(Node):
             baseline_speed=self.baseline_speed,
             min_speed=self.min_speed,
             max_speed=self.max_speed,
+            inverse_radius_exponent=self.inverse_radius_exponent,
         )
 
     def _timer_publish_setpoint(self):

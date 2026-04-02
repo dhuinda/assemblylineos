@@ -78,8 +78,7 @@ def generate_launch_description():
         parameters=[],
     )
     
-    # Pot → roll OD (dancer): min OD at pot_raw_min, max OD at pot_raw_max; motor speed ∝ 1/R for constant web speed
-    # pot_raw_min: ADC at empty 3.5" OD (non-zero mechanical zero → map that reading to min radius so baseline speed applies)
+    # Pot → roll OD: ADC 40 = empty 3.5" OD; ADC 1023 = 3.5 + 13" OD (span 983 counts, not 1023)
     potentiometer_speed_node = Node(
         package='assembly_line_control',
         executable='potentiometer_speed_node',
@@ -87,7 +86,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'od_min_inches': 3.5,
-            'od_max_inches': 16.5,
+            'roll_od_growth_inches': 13.0,
+            'od_max_inches': 0.0,
             'pot_raw_min': 40.0,
             'pot_raw_max': 1023.0,
         }],
