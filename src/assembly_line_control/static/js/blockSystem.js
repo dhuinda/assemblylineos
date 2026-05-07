@@ -163,6 +163,12 @@ const BlockSystem = {
                 const motorIdSelect = blockElement.querySelector('select[data-param="motor_id"]');
                 data.motor_id = motorIdSelect ? parseInt(motorIdSelect.value) || 1 : 1;
                 if (data.motor_id < 1 || data.motor_id > 2) data.motor_id = 1;
+            } else if (type === 'wait-key') {
+                const btn = blockElement.querySelector('[data-action="wait-key-capture"]');
+                const fromDataset = blockElement.dataset.keyCode || blockElement.getAttribute('data-key-code');
+                const fromBtn = btn && btn.getAttribute('data-keycode');
+                const code = (fromDataset && String(fromDataset).trim()) || (fromBtn && String(fromBtn).trim()) || 'KeyK';
+                data.keyCode = code;
             } else if (type === 'trigger' || type === 'pause') {
                 // These types don't need additional data
             } else if (type === 'event') {
@@ -289,6 +295,10 @@ const BlockSystem = {
             if (!blockData.motor_id || blockData.motor_id < 1 || blockData.motor_id > 2) {
                 errors.push('Unsubscribe motor speed: invalid motor ID (use 1 or 2)');
             }
+        } else if (blockData.type === 'wait-key') {
+            if (!blockData.keyCode || !String(blockData.keyCode).trim()) {
+                warnings.push('Wait-key block has no key binding (default will be used)');
+            }
         }
         
         return {
@@ -360,6 +370,9 @@ const BlockSystem = {
             block.sensorId = templateData.sensorId || '';
         } else if (templateData.type === 'throw-error') {
             block.errorMessage = templateData.errorMessage || '';
+        } else if (templateData.type === 'wait-key') {
+            const code = (templateData.keyCode && String(templateData.keyCode).trim()) || 'KeyK';
+            block.keyCode = code;
         }
         // Note: pause, forever, break, try, catch don't need additional properties beyond type
         
@@ -426,6 +439,8 @@ const BlockSystem = {
             baseHeight = 100; // 5 grid units (already odd) = 100px
         } else if (blockData.type === 'event') {
             baseHeight = 100; // 5 grid units (already odd) = 100px
+        } else if (blockData.type === 'wait-key') {
+            baseHeight = 140; // label + key row + capture button
         }
         
         // Round to nearest odd multiple of grid size
@@ -560,6 +575,11 @@ const BlockSystem = {
                     blockData.motor_id = parseInt(motorIdSelect.value) || 1;
                     if (blockData.motor_id < 1 || blockData.motor_id > 2) blockData.motor_id = 1;
                 }
+            } else if (blockData.type === 'wait-key') {
+                const capBtn = blockEl.querySelector('[data-action="wait-key-capture"]');
+                const code = (capBtn && capBtn.getAttribute('data-keycode')) || blockEl.dataset.keyCode || 'KeyK';
+                blockData.keyCode = String(code).trim() || 'KeyK';
+                blockEl.dataset.keyCode = blockData.keyCode;
             }
             // Note: trigger and pause blocks have no parameters
             
@@ -603,7 +623,8 @@ const BlockSystem = {
             'read-sensor': 'block-sensor',
             'try': 'block-error',
             'catch': 'block-error',
-            'throw-error': 'block-error'
+            'throw-error': 'block-error',
+            'wait-key': 'block-trigger'
         };
         return classMap[type] || '';
     }

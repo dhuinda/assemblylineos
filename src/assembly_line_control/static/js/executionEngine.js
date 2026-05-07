@@ -17,6 +17,81 @@ const ExecutionEngine = {
     loopStack: [], // Stack of active loops: [{blockId, type, count, currentIteration, shouldBreak}]
     errorStack: [], // Stack of active try blocks: [{blockId, catchBlockId, error}]
     currentError: null, // Current error being handled
+    /** @type {Map<string, Array<{ blockId: number, resolve: function(boolean): void }>>} Waiters per KeyboardEvent.code; one matching keydown resolves all queued waiters for that code (parallel branches). */
+    _keyWaitQueues: null,
+    
+    _ensureKeyWaitQueues() {
+        if (!this._keyWaitQueues) {
+            this._keyWaitQueues = new Map();
+        }
+        return this._keyWaitQueues;
+    },
+    
+    /**
+     * Clear all wait-key listeners and resolve them as aborted (false).
+     */
+    clearKeyWaitQueues() {
+        if (!this._keyWaitQueues) return;
+        this._keyWaitQueues.forEach((queue) => {
+            while (queue.length) {
+                const entry = queue.shift();
+                try {
+                    entry.resolve(false);
+                } catch (err) {
+                    console.error('[EXECUTE] key wait resolve error:', err);
+                }
+            }
+        });
+        this._keyWaitQueues.clear();
+    },
+    
+    /**
+     * Wait until the user presses keyCode (broadcast with any other waiters on that code) or execution stops.
+     * @returns {Promise<boolean>} true if key matched, false if aborted (stop / not executing)
+     */
+    waitForKeyPress(keyCode, blockId) {
+        return new Promise((resolve) => {
+            if (!this.isExecuting) {
+                resolve(false);
+                return;
+            }
+            const code = (keyCode && String(keyCode).trim()) || 'KeyK';
+            const queues = this._ensureKeyWaitQueues();
+            let queue = queues.get(code);
+            if (!queue) {
+                queue = [];
+                queues.set(code, queue);
+            }
+            queue.push({ blockId, resolve });
+            UIUtils.log(`[WAIT-KEY] Block #${blockId} queued for ${code} (${queue.length} in queue)`, 'info');
+        });
+    },
+    
+    /**
+     * Release every wait-key waiter queued for this key (one keydown satisfies all parallel waits on the same code).
+     * @returns {boolean} true if at least one waiter was released (caller may preventDefault)
+     */
+    tryConsumeWaitKey(code) {
+        if (!this.isExecuting || this.isPaused) return false;
+        const queues = this._keyWaitQueues;
+        if (!queues) return false;
+        const queue = queues.get(code);
+        if (!queue || queue.length === 0) return false;
+        const toResolve = queue.slice();
+        queue.length = 0;
+        queues.delete(code);
+        for (const entry of toResolve) {
+            try {
+                entry.resolve(true);
+            } catch (err) {
+                console.error('[EXECUTE] wait-key resolve error:', err);
+            }
+        }
+        if (toResolve.length > 0) {
+            UIUtils.log(`[WAIT-KEY] ${code} released ${toResolve.length} waiter(s)`, 'success');
+        }
+        return true;
+    },
     
     /**
      * Start running all the workflows
@@ -45,6 +120,7 @@ const ExecutionEngine = {
         this.loopStack = [];
         this.errorStack = [];
         this.currentError = null;
+        this.clearKeyWaitQueues();
         
         // Start updating the UI to show which blocks are running
         this.startActiveBlocksUpdates();
@@ -194,6 +270,10 @@ const ExecutionEngine = {
         // Actually run the block
         await this.executeBlock(blockId);
         
+        if (!this.isExecuting) {
+            return;
+        }
+        
         // This block is done - check if any workflows were waiting for it
         this.triggerWorkflowCompleteEvents(blockId);
         
@@ -288,6 +368,18 @@ const ExecutionEngine = {
                 const duration = block.duration || 1.0;
                 UIUtils.log(`  → Delay: ${duration.toFixed(2)}s`, 'success');
                 await this.sleep(duration * 1000);
+            } else if (block.type === 'wait-key') {
+                const keyCode = (block.keyCode && String(block.keyCode).trim()) || 'KeyK';
+                if (!block.keyCode || !String(block.keyCode).trim()) {
+                    UIUtils.log(`[WARNING] Wait-key block ${blockId} has no key set; using ${keyCode}`, 'warning');
+                }
+                UIUtils.log(`  → Wait for key: ${keyCode} (block #${blockId})`, 'success');
+                const ok = await this.waitForKeyPress(keyCode, blockId);
+                if (!ok) {
+                    UIUtils.log(`  → Wait-key #${blockId}: ended without key (stop or execution ended)`, 'warning');
+                    return;
+                }
+                UIUtils.log(`  → Wait-key #${blockId}: ${keyCode} pressed — continuing`, 'success');
             } else if (block.type === 'motor-speed-from-topic') {
                 const topic = (block.topic || '').trim() || '/motor_speed/setpoint';
                 const motorId = block.motor_id === 1 || block.motor_id === 2 ? block.motor_id : 1;
@@ -818,6 +910,19 @@ const ExecutionEngine = {
                     <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                     <div class="text-xs text-yellow-400 mt-1">Waiting for message...</div>
                 `;
+            } else if (block.type === 'wait-key') {
+                estimatedDuration = Infinity;
+                timeRemaining = Infinity;
+                const kc = (block.keyCode && String(block.keyCode).trim()) || 'KeyK';
+                content = `
+                    <div class="flex items-center justify-between text-xs mb-1">
+                        <span class="accent-trigger font-semibold">WAIT FOR KEY</span>
+                        <span class="text-gray-400 font-mono">#${blockId}</span>
+                    </div>
+                    <div class="text-xs text-gray-400 mb-1">Key: ${kc}</div>
+                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-yellow-400 mt-1">Press key to continue...</div>
+                `;
             } else if (block.type === 'motor-speed-from-topic') {
                 estimatedDuration = 5; // Max wait for one message (timeout 5s)
                 timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
@@ -933,6 +1038,9 @@ const ExecutionEngine = {
                 content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-motor font-semibold">SUBSCRIBE MOTOR SPEED</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Motor ${block.motor_id || 1} ← ${(block.topic || '').trim() || '/motor_speed/setpoint'}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
             } else if (block.type === 'unsubscribe-motor-speed-topic') {
                 content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-motor font-semibold">UNSUBSCRIBE MOTOR SPEED</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">Motor ${block.motor_id || 1}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
+            } else if (block.type === 'wait-key') {
+                const kc = (block.keyCode && String(block.keyCode).trim()) || 'KeyK';
+                content = `<div class="flex items-center justify-between text-xs mb-1"><span class="accent-trigger font-semibold">WAIT FOR KEY</span><span class="text-gray-400 font-mono">#${blockId}</span></div><div class="text-xs text-gray-500">${kc}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
             } else {
                 content = `<div class="text-xs text-gray-400 font-mono">#${blockId}</div><div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>`;
             }
@@ -994,6 +1102,7 @@ const ExecutionEngine = {
      */
     stop() {
         this.isExecuting = false;
+        this.clearKeyWaitQueues();
         
         // Clear all executing blocks
         this.executingBlocks.forEach(blockId => {
@@ -1183,6 +1292,8 @@ const ExecutionEngine = {
                     duration = 0.01; // Instant
                 } else if (block.type === 'pause') {
                     duration = 2.0; // Assume pause is ~2 seconds for visualization
+                } else if (block.type === 'wait-key') {
+                    duration = 0.05; // Instant in playback order visualization
                 }
                 
                 // Add to execution order

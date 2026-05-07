@@ -144,12 +144,16 @@ const WorkflowManager = {
                 }
                 
                 e.dataTransfer.effectAllowed = 'copy';
-                e.dataTransfer.setData('text/plain', JSON.stringify({
+                const transfer = {
                     type: blockEl.dataset.type,
                     motorId: blockEl.dataset.motorId,
                     relayId: blockEl.dataset.relayId,
                     eventType: blockEl.dataset.eventType
-                }));
+                };
+                if (blockEl.dataset.type === 'wait-key' && blockEl.dataset.keyCode) {
+                    transfer.keyCode = blockEl.dataset.keyCode;
+                }
+                e.dataTransfer.setData('text/plain', JSON.stringify(transfer));
                 
                 // Create a ghost image
                 const clone = blockEl.cloneNode(true);
@@ -402,6 +406,9 @@ const WorkflowManager = {
             if (data.type === 'event' && data.eventType) {
                 newBlock.eventType = data.eventType;
             }
+            if (newBlock.type === 'wait-key' && data.keyCode) {
+                newBlock.keyCode = String(data.keyCode).trim();
+            }
             
             // Set position (snapped to grid)
             newBlock.x = this.snapToGrid(x);
@@ -476,6 +483,7 @@ const WorkflowManager = {
             if (e.target.classList.contains('block-connector') || 
                 e.target.classList.contains('workflow-trigger-btn') ||
                 e.target.classList.contains('remove-btn') ||
+                e.target.closest('[data-action="wait-key-capture"]') ||
                 e.target.tagName === 'INPUT' || 
                 e.target.tagName === 'SELECT') {
                 return;

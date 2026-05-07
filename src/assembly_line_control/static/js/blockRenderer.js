@@ -2,6 +2,93 @@
  * Block Renderer - Handles rendering of block DOM elements (Scratch-like)
  */
 const BlockRenderer = {
+    waitKeyCaptureBlockEl: null,
+    _waitKeyCaptureKeyHandler: null,
+    
+    isWaitKeyCapturing() {
+        return !!this._waitKeyCaptureKeyHandler;
+    },
+    
+    /**
+     * Sync wait-key block DOM: dataset, description line, and Set key button label.
+     * @param {HTMLElement} blockEl
+     * @param {string} keyCode - KeyboardEvent.code (e.g. KeyG)
+     */
+    updateWaitKeyDescription(blockEl, keyCode) {
+        if (!blockEl || blockEl.dataset.type !== 'wait-key') return;
+        const code = (keyCode && String(keyCode).trim()) || 'KeyK';
+        const label = (typeof SettingsManager !== 'undefined' && SettingsManager.keyCodeToLabel)
+            ? SettingsManager.keyCodeToLabel(code)
+            : code;
+        blockEl.dataset.keyCode = code;
+        const display = blockEl.querySelector('[data-role="wait-key-display"]');
+        if (display) {
+            display.textContent = label;
+        }
+        const btn = blockEl.querySelector('[data-action="wait-key-capture"]');
+        if (btn) {
+            btn.setAttribute('data-keycode', code);
+            if (!btn.classList.contains('capturing')) {
+                btn.textContent = label;
+            }
+        }
+    },
+    
+    stopWaitKeyCapture() {
+        if (this._waitKeyCaptureKeyHandler) {
+            document.removeEventListener('keydown', this._waitKeyCaptureKeyHandler, true);
+            this._waitKeyCaptureKeyHandler = null;
+        }
+        if (this.waitKeyCaptureBlockEl) {
+            const blockEl = this.waitKeyCaptureBlockEl;
+            const btn = blockEl.querySelector('[data-action="wait-key-capture"]');
+            if (btn) {
+                btn.classList.remove('capturing');
+            }
+            const code = (btn && btn.getAttribute('data-keycode')) || blockEl.dataset.keyCode || 'KeyK';
+            this.updateWaitKeyDescription(blockEl, code);
+            this.waitKeyCaptureBlockEl = null;
+        }
+    },
+    
+    startWaitKeyCapture(blockEl) {
+        this.stopWaitKeyCapture();
+        const btn = blockEl.querySelector('[data-action="wait-key-capture"]');
+        if (!btn) return;
+        this.waitKeyCaptureBlockEl = blockEl;
+        btn.classList.add('capturing');
+        btn.textContent = 'Press any key...';
+        const handler = (e) => {
+            if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            const capBtn = blockEl.querySelector('[data-action="wait-key-capture"]');
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.stopWaitKeyCapture();
+                return;
+            }
+            const code = e.code || e.key;
+            const block = WorkflowManager.blocks.get(parseInt(blockEl.dataset.blockId, 10));
+            if (block) {
+                block.keyCode = code;
+            }
+            if (capBtn) {
+                capBtn.setAttribute('data-keycode', code);
+            }
+            this.stopWaitKeyCapture();
+            if (block) {
+                BlockSystem.updateBlockFromDOM(block, blockEl);
+                StorageManager.autoSave();
+            }
+        };
+        this._waitKeyCaptureKeyHandler = handler;
+        document.addEventListener('keydown', handler, true);
+    },
+    
     /**
      * Create a Scratch-style block DOM element
      * @param {Object} blockData - Block data
@@ -20,6 +107,9 @@ const BlockRenderer = {
         
         block.dataset.type = blockData.type;
         block.dataset.blockId = blockData.id;
+        if (blockData.type === 'wait-key') {
+            block.dataset.keyCode = (blockData.keyCode && String(blockData.keyCode).trim()) || 'KeyK';
+        }
         
         // Add motor_id or relay_id to dataset for querying
         if ((blockData.type === 'motor' || blockData.type === 'motor-speed-from-topic' || blockData.type === 'subscribe-motor-speed-topic' || blockData.type === 'unsubscribe-motor-speed-topic') && blockData.motor_id) {
@@ -262,6 +352,26 @@ const BlockRenderer = {
                            placeholder="duration (s)" data-param="duration" value="${blockData.duration || 1.0}"
                            onclick="event.stopPropagation()"
                            style="max-width: 100%;">
+                </div>
+            `;
+        } else if (blockData.type === 'wait-key') {
+            const kc = (blockData.keyCode && String(blockData.keyCode).trim()) || 'KeyK';
+            const keyLabel = (typeof SettingsManager !== 'undefined' && SettingsManager.keyCodeToLabel)
+                ? SettingsManager.keyCodeToLabel(kc)
+                : kc;
+            return `
+                <div class="flex flex-col gap-1" style="font-size: 10px;">
+                    <div class="flex items-center gap-2">
+                        <span class="block-id-badge">#${blockData.id}</span>
+                        <div class="font-semibold accent-trigger text-xs">WAIT FOR KEY</div>
+                    </div>
+                    <div class="text-xs text-gray-400">Waits for a key press.</div>
+                    <div class="flex items-center gap-1 flex-wrap">
+                        <span class="text-xs text-gray-300">Key:</span>
+                        <span class="text-xs font-mono text-green-400" data-role="wait-key-display">${keyLabel}</span>
+                    </div>
+                    <button type="button" class="btn-secondary px-1 py-0.5 text-xs w-full wait-key-capture-btn" data-action="wait-key-capture" data-keycode="${kc}"
+                            onmousedown="event.stopPropagation()">${keyLabel}</button>
                 </div>
             `;
         } else if (blockData.type === 'repeat') {
@@ -544,6 +654,16 @@ const BlockRenderer = {
                 StorageManager.autoSave();
             }
         });
+        
+        if (blockData.type === 'wait-key') {
+            blockEl.addEventListener('click', (e) => {
+                const cap = e.target.closest('[data-action="wait-key-capture"]');
+                if (!cap) return;
+                e.stopPropagation();
+                e.preventDefault();
+                BlockRenderer.startWaitKeyCapture(blockEl);
+            });
+        }
     },
     
 };

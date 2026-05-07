@@ -114,8 +114,11 @@ const App = {
                 e.preventDefault();
                 ProjectDialog.open();
             }
-            // Escape to close dialogs
+            // Escape to close dialogs (skip while capturing a wait-key binding on a block)
             if (e.key === 'Escape') {
+                if (typeof BlockRenderer !== 'undefined' && BlockRenderer.isWaitKeyCapturing()) {
+                    return;
+                }
                 ProjectDialog.close();
             }
             // Ctrl/Cmd + Z to undo
@@ -127,9 +130,10 @@ const App = {
             }
             // Configurable E-Stop / Start hotkeys (default Space / Enter).
             // Read fresh on each keydown so changes apply without a reload.
-            // Skip while a Settings key-capture is in progress so binding new keys
-            // doesn't also trigger the action.
-            if (typeof SettingsManager === 'undefined' || !SettingsManager.captureField) {
+            // Skip while a Settings key-capture or wait-key block key-capture is in progress
+            // so binding new keys doesn't also trigger E-Stop / Start / wait-key consume.
+            const waitKeyCapturing = typeof BlockRenderer !== 'undefined' && BlockRenderer.isWaitKeyCapturing();
+            if ((typeof SettingsManager === 'undefined' || !SettingsManager.captureField) && !waitKeyCapturing) {
                 const active = document.activeElement;
                 const isInput = active && (
                     active.tagName === 'INPUT' ||
@@ -154,6 +158,11 @@ const App = {
                         if (typeof startExecution === 'function') {
                             startExecution();
                         }
+                    } else if (typeof ExecutionEngine !== 'undefined' &&
+                        ExecutionEngine.isExecuting &&
+                        !ExecutionEngine.isPaused &&
+                        ExecutionEngine.tryConsumeWaitKey(e.code)) {
+                        e.preventDefault();
                     }
                 }
             }
