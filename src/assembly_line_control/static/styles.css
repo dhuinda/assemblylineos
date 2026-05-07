@@ -1226,6 +1226,32 @@ button:disabled {
     margin-top: 8px;
 }
 
+/* Control capture button (key remap) */
+.control-capture-btn {
+    cursor: pointer;
+    font-family: inherit;
+    text-transform: none;
+    font-weight: 500;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.control-capture-btn:hover {
+    border-color: #3b82f6;
+}
+
+.control-capture-btn.capturing {
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+    background: rgba(245, 158, 11, 0.08);
+    color: #fbbf24;
+    animation: capture-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes capture-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25); }
+    50%      { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.15); }
+}
+
 /* Custom Pins Container */
 .custom-pins-container {
     display: flex;

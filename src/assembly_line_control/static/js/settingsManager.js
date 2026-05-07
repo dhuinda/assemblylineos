@@ -18,7 +18,8 @@ const SettingsManager = {
             { id: 3, pin: 56 },  // A2
             { id: 4, pin: 57 }   // A3
         ],
-        custom: []
+        custom: [],
+        controls: { eStop: 'Space', start: 'Enter' }
     },
     
     // Current configuration
@@ -26,6 +27,10 @@ const SettingsManager = {
     
     // Custom pin counter for unique IDs
     customPinCounter: 0,
+
+    // Active key-capture field name when remapping a control, or null
+    captureField: null,
+    _captureKeyHandler: null,
     
     /**
      * Initialize the settings manager
@@ -64,6 +69,7 @@ const SettingsManager = {
         if (modal) {
             modal.classList.remove('visible');
             this.clearError();
+            this.stopCapture();
         }
     },
     
@@ -102,6 +108,22 @@ const SettingsManager = {
                 this.addCustomPinRow(pin.name, pin.pin, pin.mode);
             });
         }
+
+        // Controls (keyboard hotkeys)
+        this.stopCapture();
+        const controls = this.config.controls || this.defaultConfig.controls;
+        this.applyControlToButton('eStop', controls.eStop || this.defaultConfig.controls.eStop);
+        this.applyControlToButton('start', controls.start || this.defaultConfig.controls.start);
+    },
+
+    /**
+     * Update a control capture button's keycode and visible label
+     */
+    applyControlToButton(field, code) {
+        const btn = document.getElementById(field === 'eStop' ? 'controlEStopCapture' : 'controlStartCapture');
+        if (!btn) return;
+        btn.setAttribute('data-keycode', code);
+        btn.textContent = this.keyCodeToLabel(code);
     },
     
     /**
@@ -158,7 +180,8 @@ const SettingsManager = {
         const config = {
             motors: [],
             relays: [],
-            custom: []
+            custom: [],
+            controls: { ...this.defaultConfig.controls }
         };
         
         // Motor pins
@@ -202,7 +225,19 @@ const SettingsManager = {
                 }
             });
         }
-        
+
+        // Controls (keyboard hotkeys)
+        const eStopBtn = document.getElementById('controlEStopCapture');
+        const startBtn = document.getElementById('controlStartCapture');
+        if (eStopBtn) {
+            const code = eStopBtn.getAttribute('data-keycode');
+            if (code) config.controls.eStop = code;
+        }
+        if (startBtn) {
+            const code = startBtn.getAttribute('data-keycode');
+            if (code) config.controls.start = code;
+        }
+
         return config;
     },
     
@@ -271,7 +306,17 @@ const SettingsManager = {
             }
             usedPins.set(key, custom.name);
         }
-        
+
+        // Controls must have non-empty key codes (no pin uniqueness check)
+        if (config.controls) {
+            if (typeof config.controls.eStop !== 'string' || config.controls.eStop.trim() === '') {
+                return 'E-Stop hotkey is not set';
+            }
+            if (typeof config.controls.start !== 'string' || config.controls.start.trim() === '') {
+                return 'Start hotkey is not set';
+            }
+        }
+
         return null;
     },
     
@@ -317,6 +362,21 @@ const SettingsManager = {
         } catch (error) {
             console.error('[Settings] Error loading settings:', error);
             this.config = JSON.parse(JSON.stringify(this.defaultConfig));
+        }
+
+        // Backfill controls if missing (older configs without keybindings)
+        if (!this.config) {
+            this.config = JSON.parse(JSON.stringify(this.defaultConfig));
+        }
+        if (!this.config.controls || typeof this.config.controls !== 'object') {
+            this.config.controls = { ...this.defaultConfig.controls };
+        } else {
+            if (!this.config.controls.eStop) {
+                this.config.controls.eStop = this.defaultConfig.controls.eStop;
+            }
+            if (!this.config.controls.start) {
+                this.config.controls.start = this.defaultConfig.controls.start;
+            }
         }
     },
     
@@ -409,6 +469,102 @@ const SettingsManager = {
         }
     },
     
+    /**
+     * Begin capturing a key for the given control field ('eStop' or 'start').
+     * The next keydown sets the binding; Escape cancels.
+     */
+    startCapture(field) {
+        if (field !== 'eStop' && field !== 'start') return;
+
+        // Cancel any existing capture before starting a new one
+        this.stopCapture();
+
+        const btn = document.getElementById(field === 'eStop' ? 'controlEStopCapture' : 'controlStartCapture');
+        if (!btn) return;
+
+        this.captureField = field;
+        btn.classList.add('capturing');
+        btn.textContent = 'Press any key...';
+
+        const handler = (e) => {
+            // Ignore lone modifier presses so users can build modifier combos later if desired
+            if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (e.key === 'Escape') {
+                // Cancel capture without changing binding
+                this.stopCapture();
+                this.applyControlToButton(field, btn.getAttribute('data-keycode') || this.defaultConfig.controls[field]);
+                return;
+            }
+
+            const code = e.code || e.key;
+            this.applyControlToButton(field, code);
+            this.stopCapture();
+        };
+
+        this._captureKeyHandler = handler;
+        // Capture-phase listener so global hotkeys don't fire first
+        document.addEventListener('keydown', handler, true);
+    },
+
+    /**
+     * Stop key capture and clear capture UI state.
+     */
+    stopCapture() {
+        if (this._captureKeyHandler) {
+            document.removeEventListener('keydown', this._captureKeyHandler, true);
+            this._captureKeyHandler = null;
+        }
+        this.captureField = null;
+        const eStopBtn = document.getElementById('controlEStopCapture');
+        const startBtn = document.getElementById('controlStartCapture');
+        if (eStopBtn) {
+            eStopBtn.classList.remove('capturing');
+            const code = eStopBtn.getAttribute('data-keycode');
+            if (code) eStopBtn.textContent = this.keyCodeToLabel(code);
+        }
+        if (startBtn) {
+            startBtn.classList.remove('capturing');
+            const code = startBtn.getAttribute('data-keycode');
+            if (code) startBtn.textContent = this.keyCodeToLabel(code);
+        }
+    },
+
+    /**
+     * Reset a control binding to its default key.
+     */
+    resetControl(field) {
+        if (field !== 'eStop' && field !== 'start') return;
+        this.stopCapture();
+        this.applyControlToButton(field, this.defaultConfig.controls[field]);
+    },
+
+    /**
+     * Convert a KeyboardEvent.code into a human-readable label.
+     */
+    keyCodeToLabel(code) {
+        if (!code) return '';
+        if (code === 'Space') return 'Space';
+        if (code === 'Enter') return 'Enter';
+        if (code === 'Escape') return 'Esc';
+        if (code === 'Tab') return 'Tab';
+        if (code === 'Backspace') return 'Backspace';
+        if (code === 'Delete') return 'Delete';
+        if (code === 'ArrowUp') return '↑';
+        if (code === 'ArrowDown') return '↓';
+        if (code === 'ArrowLeft') return '←';
+        if (code === 'ArrowRight') return '→';
+        if (code.startsWith('Key')) return code.slice(3);
+        if (code.startsWith('Digit')) return code.slice(5);
+        if (code.startsWith('Numpad')) return 'Num ' + code.slice(6);
+        if (code.startsWith('Arrow')) return code.slice(5);
+        return code;
+    },
+
     /**
      * Reconnect to Arduino - closes connection and reconnects with new settings
      */

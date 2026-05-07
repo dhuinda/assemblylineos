@@ -125,14 +125,35 @@ const App = {
                     // Handled
                 }
             }
-            // Space bar to activate E-Stop (when not typing in an input)
-            if (e.code === 'Space') {
+            // Configurable E-Stop / Start hotkeys (default Space / Enter).
+            // Read fresh on each keydown so changes apply without a reload.
+            // Skip while a Settings key-capture is in progress so binding new keys
+            // doesn't also trigger the action.
+            if (typeof SettingsManager === 'undefined' || !SettingsManager.captureField) {
                 const active = document.activeElement;
-                const isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable);
+                const isInput = active && (
+                    active.tagName === 'INPUT' ||
+                    active.tagName === 'TEXTAREA' ||
+                    active.tagName === 'SELECT' ||
+                    active.isContentEditable
+                );
+
+                const ctrls = (typeof SettingsManager !== 'undefined' && SettingsManager.getConfig)
+                    ? SettingsManager.getConfig() : null;
+                const eStopCode = (ctrls && ctrls.controls && ctrls.controls.eStop) || 'Space';
+                const startCode = (ctrls && ctrls.controls && ctrls.controls.start) || 'Enter';
+
                 if (!isInput) {
-                    e.preventDefault();
-                    if (typeof emergencyStop === 'function') {
-                        emergencyStop();
+                    if (e.code === eStopCode) {
+                        e.preventDefault();
+                        if (typeof emergencyStop === 'function') {
+                            emergencyStop();
+                        }
+                    } else if (e.code === startCode) {
+                        e.preventDefault();
+                        if (typeof startExecution === 'function') {
+                            startExecution();
+                        }
                     }
                 }
             }
@@ -453,6 +474,11 @@ const ProjectDialog = {
 // ============================================
 
 function startExecution() {
+    if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+        if (typeof emergencyStop === 'function') {
+            emergencyStop();
+        }
+    }
     if (!ROSBridge.isConnected) {
         UIUtils.log('[ERROR] Not connected to ROS Bridge', 'error');
         return;

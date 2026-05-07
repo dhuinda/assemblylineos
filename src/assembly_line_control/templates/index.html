@@ -834,7 +834,35 @@
                     </div>
                     <p class="settings-hint">Add custom pins for sensors, LEDs, or other I/O</p>
                 </div>
-                
+
+                <!-- Controls Section -->
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Controls</h3>
+                    <div class="settings-grid">
+                        <div class="settings-group">
+                            <label class="settings-label">E-Stop</label>
+                            <div class="settings-row">
+                                <button id="controlEStopCapture" type="button" class="settings-input control-capture-btn"
+                                        data-field="eStop" data-keycode="Space"
+                                        onclick="SettingsManager.startCapture('eStop')">Space</button>
+                                <button type="button" class="btn-secondary px-2 py-1 text-xs"
+                                        onclick="SettingsManager.resetControl('eStop')">Reset</button>
+                            </div>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-label">Start</label>
+                            <div class="settings-row">
+                                <button id="controlStartCapture" type="button" class="settings-input control-capture-btn"
+                                        data-field="start" data-keycode="Enter"
+                                        onclick="SettingsManager.startCapture('start')">Enter</button>
+                                <button type="button" class="btn-secondary px-2 py-1 text-xs"
+                                        onclick="SettingsManager.resetControl('start')">Reset</button>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="settings-hint">Click a button, then press a key. Hotkeys are ignored while typing in inputs.</p>
+                </div>
+
                 <!-- Arduino Connection Section -->
                 <div class="settings-section">
                     <h3 class="settings-section-title">Arduino Connection</h3>

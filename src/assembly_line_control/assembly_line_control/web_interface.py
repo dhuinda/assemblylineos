@@ -323,7 +323,8 @@ def get_default_settings():
             {"id": 3, "pin": 56},  # A2
             {"id": 4, "pin": 57}   # A3
         ],
-        "custom": []
+        "custom": [],
+        "controls": {"eStop": "Space", "start": "Enter"}
     }
 
 

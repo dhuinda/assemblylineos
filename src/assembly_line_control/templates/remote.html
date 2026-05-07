@@ -337,6 +337,9 @@
         }
 
         function startExecution() {
+            if (typeof ExecutionEngine !== 'undefined' && ExecutionEngine.isExecuting) {
+                emergencyStop();
+            }
             if (!currentProjectId) { log('Select a project first', 'error'); return; }
             if (typeof ExecutionEngine === 'undefined') { log('Execution engine not ready', 'error'); return; }
             if (!ROSBridge.isConnected) { log('Not connected to ROS', 'error'); return; }
