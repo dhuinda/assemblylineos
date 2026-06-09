@@ -7,10 +7,10 @@ This script:
 1. Creates a systemd service file
 2. Installs it to /etc/systemd/system/
 3. Enables it to start at boot
-4. Optionally starts the service immediately
+4. Hard-stops any existing unit, installs the new one, and starts it
 
 Usage:
-    sudo python3 setup_browser_service.py [--start]
+    sudo python3 setup_browser_service.py [--hostname hostname.local]
 """
 
 import os
@@ -98,11 +98,20 @@ def ensure_launcher_script(script_dir, user):
         return False
 
 
-def create_service_file(script_dir, user, home, ip_start=100, ip_end=199, port=1111):
+def normalize_hostname(hostname):
+    """Normalize hostnames so callers can pass either 'name' or 'name.local'."""
+    hostname = hostname.strip()
+    if not hostname.endswith('.local'):
+        hostname = f'{hostname}.local'
+    return hostname
+
+
+def create_service_file(script_dir, user, home, hostname='hostname.local', port=1111):
     """Create the systemd service file content."""
     script_dir_str = str(script_dir)
     service_name = 'raspi-browser-launcher.service'
     script_path = script_dir / 'raspi_browser_launcher.py'
+    hostname = normalize_hostname(hostname)
     
     service_content = f"""[Unit]
 Description=Raspberry Pi Browser Launcher Service
@@ -124,11 +133,15 @@ Environment="XAUTHORITY=/home/{user}/.Xauthority"
 # Wait for X server to be ready
 ExecStartPre=/bin/sleep 10
 
-ExecStart=/usr/bin/env python3 {script_path} --ip-start {ip_start} --ip-end {ip_end} --port {port}
+ExecStart=/usr/bin/env python3 {script_path} --hostname {hostname} --port {port}
 
 # Restart policy
 Restart=always
 RestartSec=10
+KillMode=control-group
+KillSignal=SIGKILL
+SendSIGKILL=yes
+TimeoutStopSec=5
 
 # Logging
 StandardOutput=journal
@@ -200,27 +213,29 @@ def start_service(service_name):
         return False
 
 
-def stop_service(service_name):
-    """Stop the service if it's running."""
+def hard_stop_service(service_name):
+    """Hard-stop the service and any processes left in its control group."""
     try:
-        # Check if service is active
-        result = subprocess.run(
-            ['systemctl', 'is-active', service_name],
-            capture_output=True,
-            text=True
+        print(f"Hard-stopping service {service_name}...")
+        subprocess.run(
+            ['systemctl', 'kill', '--kill-who=all', '--signal=SIGKILL', service_name],
+            check=False,
+            capture_output=True
         )
-        
-        if result.returncode == 0:
-            print(f"Stopping service {service_name}...")
-            subprocess.run(['systemctl', 'stop', service_name], 
-                         check=False, capture_output=True)
-            print("✓ Service stopped")
-            return True
-        else:
-            print("Service is not running")
-            return True
+        subprocess.run(
+            ['systemctl', 'stop', service_name],
+            check=False,
+            capture_output=True
+        )
+        subprocess.run(
+            ['systemctl', 'reset-failed', service_name],
+            check=False,
+            capture_output=True
+        )
+        print("✓ Service hard-stopped")
+        return True
     except Exception as e:
-        print(f"⚠ Warning: Could not stop service: {e}")
+        print(f"⚠ Warning: Could not hard-stop service: {e}")
         return False
 
 
@@ -270,7 +285,7 @@ def check_root():
     """Check if running as root (required for systemd operations)."""
     if os.geteuid() != 0:
         print("✗ Error: This script must be run with sudo")
-        print("Usage: sudo python3 setup_browser_service.py [--start]")
+        print("Usage: sudo python3 setup_browser_service.py [--hostname hostname.local]")
         return False
     return True
 
@@ -282,19 +297,18 @@ def main():
     parser.add_argument(
         '--start',
         action='store_true',
-        help='Start the service immediately after installation'
+        help='Deprecated: service starts by default after installation'
     )
     parser.add_argument(
-        '--ip-start',
-        type=int,
-        default=100,
-        help='Starting IP in range (default: 100)'
+        '--no-start',
+        action='store_true',
+        help='Install and enable the service without starting it'
     )
     parser.add_argument(
-        '--ip-end',
-        type=int,
-        default=199,
-        help='Ending IP in range (default: 199)'
+        '--hostname',
+        type=str,
+        default='hostname.local',
+        help='Target .local hostname to resolve (default: hostname.local)'
     )
     parser.add_argument(
         '--port',
@@ -304,6 +318,8 @@ def main():
     )
     
     args = parser.parse_args()
+    if args.start:
+        print("Note: --start is no longer needed; services start by default.")
     
     print("=" * 60)
     print("Raspberry Pi Browser Launcher - Systemd Service Setup")
@@ -321,7 +337,7 @@ def main():
     print(f"Script directory: {script_dir}")
     print(f"User: {user}")
     print(f"Home: {home}")
-    print(f"IP Range: 192.168.0.{args.ip_start}-{args.ip_end}")
+    print(f"Target hostname: {normalize_hostname(args.hostname)}")
     print(f"Port: {args.port}")
     print()
     
@@ -336,8 +352,7 @@ def main():
         script_dir, 
         user, 
         home,
-        ip_start=args.ip_start,
-        ip_end=args.ip_end,
+        hostname=args.hostname,
         port=args.port
     )
     
@@ -346,8 +361,8 @@ def main():
     print("Reinstalling service...")
     print("-" * 60)
     
-    # Stop the service if it's running
-    stop_service(service_name)
+    # Hard-stop the service before replacing its unit file
+    hard_stop_service(service_name)
     
     # Disable the service if it's enabled
     disable_service(service_name)
@@ -374,8 +389,8 @@ def main():
     if not enable_service(service_name):
         sys.exit(1)
     
-    # Start service if requested
-    if args.start:
+    # Start service unless explicitly skipped
+    if not args.no_start:
         print()
         if not start_service(service_name):
             sys.exit(1)
@@ -394,7 +409,7 @@ def main():
     print(f"  Disable: sudo systemctl disable {service_name}")
     print()
     
-    if not args.start:
+    if args.no_start:
         print("To start the service now, run:")
         print(f"  sudo systemctl start {service_name}")
         print()
