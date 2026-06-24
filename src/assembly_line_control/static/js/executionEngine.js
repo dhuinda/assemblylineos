@@ -19,6 +19,7 @@ const ExecutionEngine = {
     currentError: null, // Current error being handled
     /** @type {Map<string, Array<{ blockId: number, resolve: function(boolean): void }>>} Waiters per KeyboardEvent.code; one matching keydown resolves all queued waiters for that code (parallel branches). */
     _keyWaitQueues: null,
+    _prevActiveBlockKey: '', // Last known sorted executing block IDs; skip full rebuild when unchanged
     
     _ensureKeyWaitQueues() {
         if (!this._keyWaitQueues) {
@@ -120,6 +121,7 @@ const ExecutionEngine = {
         this.loopStack = [];
         this.errorStack = [];
         this.currentError = null;
+        this._prevActiveBlockKey = '';
         this.clearKeyWaitQueues();
         
         // Start updating the UI to show which blocks are running
@@ -761,85 +763,71 @@ const ExecutionEngine = {
         const activePanel = document.getElementById('activeBlocksPanel');
         if (!activePanel) return;
         
-        // Calculate total elapsed time (use performance.now() for higher precision)
         const now = performance.now();
         const executionStart = this.executionStartTime || now;
         const totalElapsed = this.executionStartTime ? ((now - executionStart) / 1000) : 0;
         
         if (this.executingBlocks.size === 0 && totalElapsed === 0) {
-            // Only update if content changed to avoid unnecessary DOM manipulation
             if (activePanel.innerHTML !== '<p class="text-xs text-gray-500 text-center py-4">No blocks executing</p>') {
                 activePanel.innerHTML = '<p class="text-xs text-gray-500 text-center py-4">No blocks executing</p>';
             }
+            this._prevActiveBlockKey = '';
             return;
         }
         
-        // Use DocumentFragment for batch DOM updates (more efficient)
+        // Only do a full DOM rebuild when the executing block set changes;
+        // otherwise update only the time/step text nodes in-place.
+        const activeBlockKey = Array.from(this.executingBlocks).sort().join(',');
+        if (activeBlockKey === this._prevActiveBlockKey) {
+            this._updateActiveBlockTimes(activePanel, now, totalElapsed);
+            return;
+        }
+        this._prevActiveBlockKey = activeBlockKey;
+        
         const fragment = document.createDocumentFragment();
         
-        // Show total elapsed time at the top
         if (this.executionStartTime) {
             const elapsedEl = document.createElement('div');
             elapsedEl.className = 'text-xs text-gray-400 mb-3 pb-2 border-b border-gray-700';
-            elapsedEl.innerHTML = `<span class="font-semibold text-white">Total Elapsed:</span> <span class="text-green-400">${totalElapsed.toFixed(2)}s</span>`;
+            elapsedEl.innerHTML = `<span class="font-semibold text-white">Total Elapsed:</span> <span class="text-green-400" data-total-elapsed>${totalElapsed.toFixed(2)}s</span>`;
             fragment.appendChild(elapsedEl);
         }
         
-        // Show each executing block
         this.executingBlocks.forEach(blockId => {
             const block = WorkflowManager.blocks.get(blockId);
             if (!block) return;
             
             const startTime = this.blockStartTimes.get(blockId);
-            // Use performance.now() for higher precision timing
             const blockElapsed = startTime ? ((now - startTime) / 1000) : 0;
             
             const blockEl = document.createElement('div');
             const typeClass = BlockSystem.getBlockTypeClass(block.type);
             blockEl.className = `p-2 ${typeClass} card mb-2`;
+            blockEl.dataset.blockExecId = blockId;
             
             let content = '';
-            let estimatedDuration = 0;
-            let timeRemaining = 0;
             
             if (block.type === 'motor') {
-                // Use custom speed if set, otherwise use global motor speed (for initial estimate)
                 const hasCustomSpeed = block.speed !== undefined && block.speed !== null;
                 const blockOrGlobalSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
                 const motorStatus = ROSBridge.getMotorStatus(block.motor_id);
-                // Use live speed from motor status when available so time/steps remaining reflect speed updates (e.g. potentiometer)
                 const currentSpeed = (motorStatus && motorStatus.speed != null && motorStatus.speed > 0)
-                    ? motorStatus.speed
-                    : blockOrGlobalSpeed;
+                    ? motorStatus.speed : blockOrGlobalSpeed;
                 const speedLabel = (motorStatus && motorStatus.speed != null) ? 'live' : (hasCustomSpeed ? 'custom' : 'global');
                 
-                // Apply direction for display (effective steps)
                 let effectiveSteps = block.steps || 0;
-                if (block.direction === 'backward') {
-                    effectiveSteps = -Math.abs(effectiveSteps);
-                } else if (block.direction === 'forward' || !block.direction) {
-                    effectiveSteps = Math.abs(effectiveSteps);
-                }
+                if (block.direction === 'backward') effectiveSteps = -Math.abs(effectiveSteps);
+                else effectiveSteps = Math.abs(effectiveSteps);
                 
                 const stepsRemaining = motorStatus ? motorStatus.steps_remaining : null;
-                const totalSteps = effectiveSteps;
+                const estimatedDuration = currentSpeed > 0 ? (Math.abs(effectiveSteps) / currentSpeed) : 0;
+                let timeRemaining = (stepsRemaining !== null && stepsRemaining !== undefined && currentSpeed > 0)
+                    ? Math.abs(stepsRemaining) / currentSpeed
+                    : Math.max(0, estimatedDuration - blockElapsed);
                 
-                // Estimated duration at current (or block) speed; time remaining uses current speed
-                estimatedDuration = currentSpeed > 0 ? (Math.abs(totalSteps) / currentSpeed) : 0;
-                
-                if (stepsRemaining !== null && stepsRemaining !== undefined && currentSpeed > 0) {
-                    // Recalculate remaining time from actual steps remaining and current (live) speed
-                    timeRemaining = Math.abs(stepsRemaining) / currentSpeed;
-                } else {
-                    // Estimate based on elapsed time and total duration
-                    timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
-                }
-                
-                let stepsDisplay = `${totalSteps} steps`;
+                let stepsDisplay = `${effectiveSteps} steps`;
                 if (stepsRemaining !== null && stepsRemaining !== undefined) {
-                    // Round to avoid display glitches from floating point values
-                    const displayRemaining = Math.round(Math.abs(stepsRemaining));
-                    stepsDisplay = `${displayRemaining} remaining / ${totalSteps} total`;
+                    stepsDisplay = `${Math.round(Math.abs(stepsRemaining))} remaining / ${effectiveSteps} total`;
                 }
                 
                 content = `
@@ -847,59 +835,48 @@ const ExecutionEngine = {
                         <span class="accent-motor font-semibold">MOTOR ${block.motor_id}</span>
                         <span class="text-gray-400 font-mono">#${blockId}</span>
                     </div>
-                    <div class="text-xs text-gray-400 mb-1">${stepsDisplay}</div>
+                    <div class="text-xs text-gray-400 mb-1" data-block-exec-steps="${blockId}">${stepsDisplay}</div>
                     <div class="flex items-center justify-between text-xs text-gray-500">
-                        <span>Elapsed: ${blockElapsed.toFixed(2)}s</span>
-                        <span>Remaining: ${timeRemaining.toFixed(2)}s</span>
+                        <span data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</span>
+                        <span data-block-exec-remaining="${blockId}">Remaining: ${timeRemaining.toFixed(2)}s</span>
                     </div>
-                    <div class="text-xs text-gray-500 mt-1">Est. total: ${estimatedDuration.toFixed(2)}s @ ${currentSpeed.toFixed(0)} sps (${speedLabel})</div>
+                    <div class="text-xs text-gray-500 mt-1" data-block-exec-speed="${blockId}">Est. total: ${estimatedDuration.toFixed(2)}s @ ${currentSpeed.toFixed(0)} sps (${speedLabel})</div>
                 `;
             } else if (block.type === 'relay') {
-                estimatedDuration = 0; // Relays are instant
-                timeRemaining = 0;
-                
                 content = `
                     <div class="flex items-center justify-between text-xs mb-1">
                         <span class="accent-relay font-semibold">RELAY ${block.relay_id}</span>
                         <span class="text-gray-400 font-mono">#${blockId}</span>
                     </div>
                     <div class="text-xs text-gray-400 mb-1">${(block.state || 'off').toUpperCase()}</div>
-                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-gray-500" data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                 `;
             } else if (block.type === 'delay') {
-                estimatedDuration = block.duration || 1.0;
-                timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
-                
+                const estimatedDuration = block.duration || 1.0;
+                const timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
                 content = `
                     <div class="flex items-center justify-between text-xs mb-1">
                         <span class="accent-delay font-semibold">DELAY</span>
                         <span class="text-gray-400 font-mono">#${blockId}</span>
                     </div>
                     <div class="flex items-center justify-between text-xs text-gray-500">
-                        <span>Elapsed: ${blockElapsed.toFixed(2)}s</span>
-                        <span>Remaining: ${timeRemaining.toFixed(2)}s</span>
+                        <span data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</span>
+                        <span data-block-exec-remaining="${blockId}">Remaining: ${timeRemaining.toFixed(2)}s</span>
                     </div>
                     <div class="text-xs text-gray-500 mt-1">Est. total: ${estimatedDuration.toFixed(2)}s</div>
                 `;
             } else if (block.type === 'pause') {
-                estimatedDuration = Infinity; // Pause is indefinite
-                timeRemaining = Infinity;
-                
                 content = `
                     <div class="flex items-center justify-between text-xs mb-1">
                         <span class="accent-pause font-semibold">PAUSE</span>
                         <span class="text-gray-400 font-mono">#${blockId}</span>
                     </div>
-                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-gray-500" data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                     <div class="text-xs text-yellow-400 mt-1">Waiting for resume...</div>
                 `;
             } else if (block.type === 'ros-trigger') {
-                estimatedDuration = Infinity; // Wait is indefinite until message received
-                timeRemaining = Infinity;
-                
                 const topic = block.topic || '/topic';
                 const expectedString = block.expectedString || '';
-                
                 content = `
                     <div class="flex items-center justify-between text-xs mb-1">
                         <span class="accent-trigger font-semibold">WAIT FOR ROS TOPIC</span>
@@ -907,12 +884,10 @@ const ExecutionEngine = {
                     </div>
                     <div class="text-xs text-gray-400 mb-1">Topic: ${topic}</div>
                     <div class="text-xs text-gray-400 mb-1">Waiting for: "${expectedString}"</div>
-                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-gray-500" data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                     <div class="text-xs text-yellow-400 mt-1">Waiting for message...</div>
                 `;
             } else if (block.type === 'wait-key') {
-                estimatedDuration = Infinity;
-                timeRemaining = Infinity;
                 const kc = (block.keyCode && String(block.keyCode).trim()) || 'KeyK';
                 content = `
                     <div class="flex items-center justify-between text-xs mb-1">
@@ -920,12 +895,12 @@ const ExecutionEngine = {
                         <span class="text-gray-400 font-mono">#${blockId}</span>
                     </div>
                     <div class="text-xs text-gray-400 mb-1">Key: ${kc}</div>
-                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-gray-500" data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                     <div class="text-xs text-yellow-400 mt-1">Press key to continue...</div>
                 `;
             } else if (block.type === 'motor-speed-from-topic') {
-                estimatedDuration = 5; // Max wait for one message (timeout 5s)
-                timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
+                const estimatedDuration = 5;
+                const timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
                 const topic = block.topic || '/motor_speed/setpoint';
                 const motorId = block.motor_id || 1;
                 content = `
@@ -934,12 +909,10 @@ const ExecutionEngine = {
                         <span class="text-gray-400 font-mono">#${blockId}</span>
                     </div>
                     <div class="text-xs text-gray-400 mb-1">Motor ${motorId} ← ${topic}</div>
-                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-gray-500" data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                     <div class="text-xs text-yellow-400 mt-1">Waiting for Float32...</div>
                 `;
             } else if (block.type === 'subscribe-motor-speed-topic') {
-                estimatedDuration = 0;
-                timeRemaining = 0;
                 const topic = block.topic || '/motor_speed/setpoint';
                 const motorId = block.motor_id || 1;
                 content = `
@@ -950,8 +923,6 @@ const ExecutionEngine = {
                     <div class="text-xs text-gray-400 mb-1">Motor ${motorId} ← ${topic}</div>
                 `;
             } else if (block.type === 'unsubscribe-motor-speed-topic') {
-                estimatedDuration = 0;
-                timeRemaining = 0;
                 const motorId = block.motor_id || 1;
                 content = `
                     <div class="flex items-center justify-between text-xs mb-1">
@@ -961,23 +932,19 @@ const ExecutionEngine = {
                     <div class="text-xs text-gray-400 mb-1">Motor ${motorId}</div>
                 `;
             } else if (block.type === 'event') {
-                estimatedDuration = 0; // Events are instant
-                timeRemaining = 0;
-                
                 content = `
                     <div class="flex items-center justify-between text-xs mb-1">
                         <span class="accent-trigger font-semibold">EVENT</span>
                         <span class="text-gray-400 font-mono">#${blockId}</span>
                     </div>
                     <div class="text-xs text-gray-400 mb-1">${block.eventType || 'unknown'}</div>
-                    <div class="text-xs text-gray-500">Elapsed: ${blockElapsed.toFixed(2)}s</div>
+                    <div class="text-xs text-gray-500" data-block-exec-elapsed="${blockId}">Elapsed: ${blockElapsed.toFixed(2)}s</div>
                 `;
             }
             blockEl.innerHTML = content;
             fragment.appendChild(blockEl);
         });
         
-        // Show count if multiple blocks executing in parallel
         if (this.executingBlocks.size > 1) {
             const countEl = document.createElement('div');
             countEl.className = 'text-xs text-gray-400 text-center mt-2 pt-2 border-t border-gray-700';
@@ -985,9 +952,65 @@ const ExecutionEngine = {
             fragment.appendChild(countEl);
         }
         
-        // Batch update: clear and append fragment in one operation
         activePanel.innerHTML = '';
         activePanel.appendChild(fragment);
+    },
+
+    /**
+     * Lightweight in-place update for time/step values when executing block set hasn't changed.
+     * Queries by data attributes set during the full rebuild to update only text content.
+     */
+    _updateActiveBlockTimes(activePanel, now, totalElapsed) {
+        const totalEl = activePanel.querySelector('[data-total-elapsed]');
+        if (totalEl) totalEl.textContent = `${totalElapsed.toFixed(2)}s`;
+        
+        this.executingBlocks.forEach(blockId => {
+            const block = WorkflowManager.blocks.get(blockId);
+            if (!block) return;
+            
+            const startTime = this.blockStartTimes.get(blockId);
+            const blockElapsed = startTime ? ((now - startTime) / 1000) : 0;
+            
+            const elapsedEl = activePanel.querySelector(`[data-block-exec-elapsed="${blockId}"]`);
+            if (elapsedEl) elapsedEl.textContent = `Elapsed: ${blockElapsed.toFixed(2)}s`;
+            
+            if (block.type === 'motor') {
+                const hasCustomSpeed = block.speed !== undefined && block.speed !== null;
+                const blockOrGlobalSpeed = hasCustomSpeed ? block.speed : MotorSpeedManager.getSpeed(block.motor_id);
+                const motorStatus = ROSBridge.getMotorStatus(block.motor_id);
+                const currentSpeed = (motorStatus && motorStatus.speed != null && motorStatus.speed > 0)
+                    ? motorStatus.speed : blockOrGlobalSpeed;
+                const speedLabel = (motorStatus && motorStatus.speed != null) ? 'live' : (hasCustomSpeed ? 'custom' : 'global');
+                
+                let effectiveSteps = block.steps || 0;
+                if (block.direction === 'backward') effectiveSteps = -Math.abs(effectiveSteps);
+                else effectiveSteps = Math.abs(effectiveSteps);
+                
+                const stepsRemaining = motorStatus ? motorStatus.steps_remaining : null;
+                const estimatedDuration = currentSpeed > 0 ? (Math.abs(effectiveSteps) / currentSpeed) : 0;
+                const timeRemaining = (stepsRemaining !== null && stepsRemaining !== undefined && currentSpeed > 0)
+                    ? Math.abs(stepsRemaining) / currentSpeed
+                    : Math.max(0, estimatedDuration - blockElapsed);
+                
+                const remainingEl = activePanel.querySelector(`[data-block-exec-remaining="${blockId}"]`);
+                if (remainingEl) remainingEl.textContent = `Remaining: ${timeRemaining.toFixed(2)}s`;
+                
+                const stepsEl = activePanel.querySelector(`[data-block-exec-steps="${blockId}"]`);
+                if (stepsEl) {
+                    stepsEl.textContent = (stepsRemaining !== null && stepsRemaining !== undefined)
+                        ? `${Math.round(Math.abs(stepsRemaining))} remaining / ${effectiveSteps} total`
+                        : `${effectiveSteps} steps`;
+                }
+                
+                const speedEl = activePanel.querySelector(`[data-block-exec-speed="${blockId}"]`);
+                if (speedEl) speedEl.textContent = `Est. total: ${estimatedDuration.toFixed(2)}s @ ${currentSpeed.toFixed(0)} sps (${speedLabel})`;
+            } else if (block.type === 'delay') {
+                const estimatedDuration = block.duration || 1.0;
+                const timeRemaining = Math.max(0, estimatedDuration - blockElapsed);
+                const remainingEl = activePanel.querySelector(`[data-block-exec-remaining="${blockId}"]`);
+                if (remainingEl) remainingEl.textContent = `Remaining: ${timeRemaining.toFixed(2)}s`;
+            }
+        });
     },
     
     /**
@@ -1156,7 +1179,7 @@ const ExecutionEngine = {
         // Use requestAnimationFrame for smoother updates
         // Match the ROS status update rate (10Hz) to avoid display jitter
         let lastUpdateTime = 0;
-        const targetFPS = 10; // Update at 10fps to match ROS publisher rate (100ms)
+        const targetFPS = 5; // 5fps – panel diffs cheaply; ROS topic receivers don't need 10Hz
         const minUpdateInterval = 1000 / targetFPS;
         
         const updateLoop = (currentTime) => {

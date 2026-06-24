@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Assembly Line OS – Remote</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+          onload="this.rel='stylesheet'" onerror="this.remove()">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+    <script src="{{ url_for('static', filename='vendor/roslib.min.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <style>
         .remote-tap { min-height: 44px; }
@@ -427,7 +429,7 @@
                         ' <span class="' + (ardOk ? 'text-green-400' : 'text-yellow-500') + '">' + (ard ? (ardOk ? 'ARD●' : 'ARD○') : 'ARD…') + '</span>' +
                         ' <span class="' + (run ? 'text-amber-400 font-bold' : 'text-gray-500') + '">' + (run ? 'RUN' : 'idle') + '</span>';
                 }
-                requestAnimationFrame(remoteHwStripTick);
+                setTimeout(remoteHwStripTick, 500); // ~2Hz – no need for 60fps status strip
             }
             remoteHwStripTick();
         });

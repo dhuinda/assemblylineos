@@ -16,6 +16,7 @@ const BlockConnector = {
     // Performance optimization caches
     blockPositionCache: new Map(), // blockId -> position data
     blockElementCache: new Map(), // blockId -> DOM element
+    _prevSnappingEls: new Set(), // elements with .snapping class for efficient removal
     
     /**
      * Check if a block can snap to nearby blocks
@@ -23,10 +24,9 @@ const BlockConnector = {
     checkSnapping(blockEl, blockData) {
         if (!blockEl || !blockData) return false;
         
-        // Remove snapping class from all blocks
-        document.querySelectorAll('.scratch-block').forEach(el => {
-            el.classList.remove('snapping');
-        });
+        // Clear only the elements that had .snapping – avoids O(n) querySelectorAll every drag tick
+        this._prevSnappingEls.forEach(el => el.classList.remove('snapping'));
+        this._prevSnappingEls.clear();
         
         // Event blocks can't snap below other blocks (they are roots)
         if (blockData.type === 'event') return false;
@@ -44,7 +44,7 @@ const BlockConnector = {
             // Don't snap if already connected
             if (this.isConnected(blockData.id, otherId)) return;
             
-            const otherEl = document.querySelector(`[data-block-id="${otherId}"]`);
+            const otherEl = this.getBlockElement(otherId); // use element cache instead of querySelector
             if (!otherEl) return;
             
             const otherPos = this.getBlockPosition(otherEl);
@@ -84,6 +84,8 @@ const BlockConnector = {
         if (foundSnap && bestTarget) {
             blockEl.classList.add('snapping');
             bestTarget.element.classList.add('snapping');
+            this._prevSnappingEls.add(blockEl);
+            this._prevSnappingEls.add(bestTarget.element);
             
             // Draw preview connection line
             this.drawPreviewConnection(blockEl, blockPos, bestTarget.element, bestTarget);
@@ -300,7 +302,7 @@ const BlockConnector = {
             // Don't snap if already connected
             if (this.isConnected(blockData.id, otherId)) return;
             
-            const otherEl = document.querySelector(`[data-block-id="${otherId}"]`);
+            const otherEl = this.getBlockElement(otherId); // use element cache
             if (!otherEl) return;
             
             const otherPos = this.getBlockPosition(otherEl);
@@ -348,10 +350,9 @@ const BlockConnector = {
         });
         
         if (bestSnap && snapDirection) {
-            // Remove snapping class from all blocks before snapping
-            document.querySelectorAll('.scratch-block').forEach(el => {
-                el.classList.remove('snapping');
-            });
+            // Clear only previously-flagged snap elements
+            this._prevSnappingEls.forEach(el => el.classList.remove('snapping'));
+            this._prevSnappingEls.clear();
             
             // Snap the block
             blockEl.style.left = bestSnap.x + 'px';
@@ -368,10 +369,9 @@ const BlockConnector = {
                 this.connectBlocks(bestSnap.block.id, blockData.id);
             }
         } else {
-            // No snap found - remove snapping class from all blocks
-            document.querySelectorAll('.scratch-block').forEach(el => {
-                el.classList.remove('snapping');
-            });
+            // No snap found - clear only previously-flagged snap elements
+            this._prevSnappingEls.forEach(el => el.classList.remove('snapping'));
+            this._prevSnappingEls.clear();
         }
     },
     

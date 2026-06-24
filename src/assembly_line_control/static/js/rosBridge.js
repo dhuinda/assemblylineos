@@ -1033,8 +1033,6 @@ const ROSBridge = {
      */
     waitForTopicString(topicName, expectedString, messageType = null, startTime = null) {
         return new Promise((resolve, reject) => {
-            console.log(`[ROS] waitForTopicString called: topic=${topicName}, expected="${expectedString}", messageType=${messageType}, startTime=${startTime}`);
-            
             if (!this.isConnected) {
                 const error = new Error('Not connected to ROS Bridge');
                 console.error('[ROS] Not connected, rejecting promise');
@@ -1048,12 +1046,7 @@ const ROSBridge = {
             // Auto-detect message type if not provided
             if (!messageType) {
                 messageType = this.getTopicMessageType(topicName);
-            } else {
-                // Log when message type is explicitly provided
-                UIUtils.log(`[ROS] Using provided message type for ${topicName}: ${messageType}`, 'success');
             }
-            
-            console.log(`[ROS] Using messageType: ${messageType} for topic: ${topicName}`);
             
             // Ensure we're using the correct message type (re-detect for system topics to be sure)
             const systemTopicTypes = this.systemTopicTypes || {
@@ -1097,10 +1090,6 @@ const ROSBridge = {
                     // ROS messages may have a header with timestamp, but for simplicity we use receive time
                     const messageTimestamp = Date.now();
                     
-                    // Log received messages for debugging (only if there are active listeners)
-                    if (subscription.listeners.size > 0) {
-                        UIUtils.log(`[ROS] Received on ${topicName}: "${receivedString}"`, 'info');
-                    }
                     
                     // Notify all listeners (create a copy of the map to avoid modification during iteration)
                     const listenersCopy = new Map(subscription.listeners);
@@ -1154,11 +1143,6 @@ const ROSBridge = {
                     const masterHandler = (msg) => {
                         const receivedString = this.extractStringFromMessage(msg, messageType);
                         const messageTimestamp = Date.now();
-                        
-                        if (subscription.listeners.size > 0) {
-                            UIUtils.log(`[ROS] Received on ${topicName}: "${receivedString}"`, 'info');
-                        }
-                        
                         const listenersCopy = new Map(subscription.listeners);
                         listenersCopy.forEach((listener) => {
                             try {
@@ -1189,50 +1173,25 @@ const ROSBridge = {
                 // >= waitStartTime, so the message will be processed correctly.
                 const messageTime = messageTimestamp !== null && messageTimestamp !== undefined ? messageTimestamp : Date.now();
                 if (messageTime < waitStartTime) {
-                    console.log(`[ROS] Ignoring message received before wait started (message: ${new Date(messageTime).toISOString()}, wait start: ${new Date(waitStartTime).toISOString()})`);
                     return;
                 }
-                
-                console.log(`[ROS] Listener called for "${expectedString}": received="${receivedString}"`);
                 
                 // Skip if already resolved
-                if (isResolved) {
-                    console.log(`[ROS] Listener already resolved, skipping`);
-                    return;
-                }
+                if (isResolved) return;
                 
                 // Normalize strings for comparison (trim and case-insensitive)
                 const normalizedReceived = receivedString.trim().toLowerCase();
                 const normalizedExpected = expectedString.trim().toLowerCase();
                 
-                console.log(`[ROS] Comparing: "${normalizedReceived}" contains "${normalizedExpected}"?`);
-                
-                // Check if this matches the expected string
-                // Support both exact match and substring match (if expected string is found in received string)
+                // Support both exact match and substring match
                 const exactMatch = normalizedReceived === normalizedExpected;
                 const substringMatch = normalizedReceived.includes(normalizedExpected);
                 
-                console.log(`[ROS] Match results: exact=${exactMatch}, substring=${substringMatch}`);
-                
                 if (exactMatch || substringMatch) {
-                    console.log(`[ROS] MATCH FOUND! Resolving promise with: "${receivedString}"`);
                     isResolved = true;
-                    
-                    // Remove this listener
                     subscription.listeners.delete(listenerKey);
-                    
-                    // Keep the subscription active even when there are no listeners
-                    // This allows it to be reused in subsequent workflow runs without
-                    // needing to unsubscribe and resubscribe, which can cause issues
-                    // The master handler will simply not call any listeners when the map is empty
-                    if (subscription.listeners.size === 0) {
-                        UIUtils.log(`[ROS] All listeners removed from ${topicName}, keeping subscription active for reuse`, 'info');
-                    }
-                    
-                    UIUtils.log(`[ROS] Matched "${expectedString}" in message: "${receivedString}"`, 'success');
+                    UIUtils.log(`[ROS] Matched "${expectedString}" on ${topicName}`, 'success');
                     resolve(receivedString);
-                } else {
-                    console.log(`[ROS] No match, continuing to wait...`);
                 }
             };
             

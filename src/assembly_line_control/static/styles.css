@@ -265,6 +265,14 @@ button:disabled {
 .btn-secondary:hover {
     background: var(--border-input);
 }
+.btn-warning {
+    background: rgba(234, 179, 8, 0.2);
+    color: #ca8a04;
+    border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.btn-warning:hover {
+    background: rgba(234, 179, 8, 0.3);
+}
 .btn-danger {
     background: #dc2626;
     color: white;
@@ -1892,5 +1900,75 @@ body.remote-view {
 .cc-badge-bad {
     background: rgba(239, 68, 68, 0.15);
     color: #f87171;
+}
+
+/* ============================================================
+ * Low-Power Mode
+ * Applied automatically on ARM/aarch64 devices (Raspberry Pi)
+ * or when the user enables it in settings.
+ * Disables expensive CSS properties: transitions, animations,
+ * backdrop-filter, and glow shadows to reduce repaint cost.
+ * ============================================================ */
+.low-power-mode *,
+.low-power-mode *::before,
+.low-power-mode *::after {
+    transition: none !important;
+    animation: none !important;
+}
+
+.low-power-mode .backdrop-blur,
+.low-power-mode [class*="backdrop"] {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/* Kill the glow/pulse animations used on status indicators */
+.low-power-mode .pulse-dot,
+.low-power-mode [class*="animate-pulse"],
+.low-power-mode [class*="animate-spin"],
+.low-power-mode [class*="animate-bounce"] {
+    animation: none !important;
+}
+
+/* Flatten shadows to avoid per-frame shadow recalculation */
+.low-power-mode .scratch-block,
+.low-power-mode .card,
+.low-power-mode .sidebar,
+.low-power-mode .block-connection-line,
+.low-power-mode .cc-card {
+    box-shadow: none !important;
+    filter: none !important;
+}
+
+/* Remove backdrop-filter from overlays (expensive on Pi) */
+.low-power-mode .pause-overlay,
+.low-power-mode .modal-backdrop {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgba(0, 0, 0, 0.75) !important;
+}
+
+/* Low-power indicator in the header */
+.low-power-badge {
+    display: none;
+}
+.low-power-mode .low-power-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 0.6rem;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(234, 179, 8, 0.2);
+    color: #ca8a04;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
 }
 

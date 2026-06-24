@@ -12,6 +12,7 @@ const ControlCenter = {
     _prevSensorVal: new Map(),
     _uiUtilsLogPatched: false,
     _rafScheduled: false,
+    _incidentRenderTimer: null,
     _potDomReady: false,
 
     init() {
@@ -153,11 +154,13 @@ const ControlCenter = {
     scheduleRefresh() {
         if (this._rafScheduled) return;
         this._rafScheduled = true;
-        requestAnimationFrame(() => {
+        setTimeout(() => {
             this._rafScheduled = false;
-            if (!this.isPaused()) this.refresh();
+            const panel = document.getElementById('sidebarPanel-control');
+            const panelVisible = panel && !panel.classList.contains('hidden');
+            if (!this.isPaused() && panelVisible) this.refresh();
             this.scheduleRefresh();
-        });
+        }, 200); // ~5Hz – avoid 60fps DOM churn on Raspberry Pi
     },
 
     refresh() {
@@ -545,7 +548,12 @@ const ControlCenter = {
     incidentPush(message, type = 'info') {
         this.incidentLog.push({ t: Date.now(), message, type });
         if (this.incidentLog.length > this.maxIncidents) this.incidentLog.shift();
-        this.renderIncidentLog();
+        // Debounce render to avoid an innerHTML rebuild for every rapid log burst
+        if (this._incidentRenderTimer) clearTimeout(this._incidentRenderTimer);
+        this._incidentRenderTimer = setTimeout(() => {
+            this._incidentRenderTimer = null;
+            this.renderIncidentLog();
+        }, 100);
     },
 
     renderIncidentLog() {

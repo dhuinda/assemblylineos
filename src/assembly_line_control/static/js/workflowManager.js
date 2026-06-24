@@ -22,7 +22,7 @@ const WorkflowManager = {
     canvasSizeUpdateScheduled: false,
     connectionsUpdateScheduled: false,
     lastDragUpdate: 0,
-    dragUpdateThrottle: 16, // Update at about 60 frames per second
+    dragUpdateThrottle: 50, // ~20fps for connector/snap work; block position updates still run every event
     
     /**
      * Set everything up
@@ -562,10 +562,9 @@ const WorkflowManager = {
                 BlockConnector.clearPreviewConnection();
                 BlockConnector.previewTarget = null;
                 
-                // Remove snapping class from all blocks
-                document.querySelectorAll('.scratch-block').forEach(el => {
-                    el.classList.remove('snapping');
-                });
+                // Clear only previously-flagged snap elements
+                BlockConnector._prevSnappingEls.forEach(el => el.classList.remove('snapping'));
+                BlockConnector._prevSnappingEls.clear();
                 
                 // Snap blocks if close
                 BlockConnector.snapBlocks(blockEl, blockData);

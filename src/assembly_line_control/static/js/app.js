@@ -598,6 +598,46 @@ function resumeSequence() {
     ExecutionEngine.resume();
 }
 
+// ── Low-Power Mode ────────────────────────────────────────────────
+// Auto-enable on ARM/aarch64 devices (Raspberry Pi) or when saved
+// by the user.  Can also be toggled from Settings via the global
+// helper below.
+(function initLowPowerMode() {
+    const STORAGE_KEY = 'assemblyLineLowPower';
+    const isARM = /aarch64|armv[78]|arm64/i.test(navigator.userAgent || '');
+    const saved = localStorage.getItem(STORAGE_KEY);
+    // Auto-enable on Pi unless the user has explicitly disabled it
+    const enabled = saved !== null ? saved === '1' : isARM;
+    if (enabled) {
+        document.body.classList.add('low-power-mode');
+        localStorage.setItem(STORAGE_KEY, '1');
+    }
+})();
+
+/**
+ * Toggle or explicitly set the low-power visual mode.
+ * @param {boolean|undefined} force - true = on, false = off, undefined = toggle
+ */
+function setLowPowerMode(force) {
+    const body = document.body;
+    const active = body.classList.contains('low-power-mode');
+    const next = force !== undefined ? force : !active;
+    body.classList.toggle('low-power-mode', next);
+    localStorage.setItem('assemblyLineLowPower', next ? '1' : '0');
+    if (typeof UIUtils !== 'undefined') {
+        UIUtils.log(`[APP] Low-power mode ${next ? 'enabled' : 'disabled'}`, 'info');
+    }
+}
+
+/** Sync the ECO button's visual active/inactive state. */
+function updateLowPowerBtn() {
+    const btn = document.getElementById('lowPowerBtn');
+    if (!btn) return;
+    const on = document.body.classList.contains('low-power-mode');
+    btn.classList.toggle('btn-warning', on);
+    btn.classList.toggle('btn-secondary', !on);
+}
+
 // Start everything up once the page is loaded
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => App.init());

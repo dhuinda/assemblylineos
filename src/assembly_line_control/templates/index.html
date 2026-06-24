@@ -8,12 +8,15 @@
         (function(){if(localStorage.getItem('assemblyLineTheme')==='light'){document.documentElement.setAttribute('data-theme','light');}})();
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <!-- JetBrains Mono: non-blocking async load; falls back to system monospace when offline -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
-    <!-- ROS Bridge WebSocket Library -->
-    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+          onload="this.rel='stylesheet'" onerror="this.remove()">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+    <!-- Self-hosted vendor scripts – no CDN dependency at runtime -->
+    <script src="{{ url_for('static', filename='vendor/Sortable.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/roslib.min.js') }}"></script>
     <!-- Custom Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
@@ -75,6 +78,12 @@
                             class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
                             title="Arduino Pin Settings">
                         SETTINGS
+                    </button>
+                    <button id="lowPowerBtn"
+                            onclick="setLowPowerMode(); updateLowPowerBtn();"
+                            class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
+                            title="Toggle low-power mode (reduces animations and repaint cost on Raspberry Pi)">
+                        ⚡ ECO
                     </button>
                 </div>
                 
@@ -1278,6 +1287,8 @@
         // Initialize motor run buttons and relay states
         window.addEventListener('DOMContentLoaded', function() {
             initTheme();
+            // Sync ECO button visual state
+            updateLowPowerBtn();
             updateMotorRunButtons(1);
             updateMotorRunButtons(2);
             updateBothMotorsRunButtons();

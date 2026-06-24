@@ -24,6 +24,10 @@ const UIUtils = {
         logEntry.className = color;
         logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
         logArea.appendChild(logEntry);
+        // Trim to 200 entries to prevent unbounded DOM growth
+        while (logArea.children.length > 200) {
+            logArea.removeChild(logArea.firstChild);
+        }
         logArea.scrollTop = logArea.scrollHeight;
     },
     
