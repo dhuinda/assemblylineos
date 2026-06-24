@@ -661,6 +661,59 @@ const BlockConnector = {
         // Draw trigger links (workflow-complete event blocks to their triggering blocks)
         this.drawTriggerLinks(canvas);
     },
+
+    /**
+     * Redraw only connections attached to one block. Used during drag so the
+     * whole workspace graph is not destroyed/recreated every mousemove.
+     * A full update still runs on mouseup to resolve routes affected by obstacles.
+     */
+    updateConnectionsForBlock(blockId) {
+        const canvas = document.getElementById('workspaceCanvas');
+        if (!canvas || blockId == null) return;
+
+        this.clearBlockCache(blockId);
+        const keys = this.getConnectionKeysForBlock(blockId);
+        keys.forEach((key) => {
+            const [fromId, toId] = key.split('-').map(Number);
+            this.removeConnectionDom(key);
+            this.drawConnection(fromId, toId, canvas);
+        });
+    },
+
+    getConnectionKeysForBlock(blockId) {
+        const keys = new Set();
+        const ownConn = this.connections.get(blockId);
+
+        if (ownConn) {
+            if (ownConn.prev) keys.add(`${ownConn.prev}-${blockId}`);
+            const nextArray = Array.isArray(ownConn.next) ? ownConn.next : (ownConn.next ? [ownConn.next] : []);
+            nextArray.forEach((nextId) => {
+                if (nextId) keys.add(`${blockId}-${nextId}`);
+            });
+        }
+
+        // Include stale/legacy map entries that might not be mirrored in connections.
+        this.connectionLines.forEach((_, key) => {
+            const [fromId, toId] = key.split('-').map(Number);
+            if (fromId === blockId || toId === blockId) keys.add(key);
+        });
+
+        return keys;
+    },
+
+    removeConnectionDom(connectionKey) {
+        const existing = this.connectionLines.get(connectionKey);
+        if (existing && existing.parentNode) existing.remove();
+
+        const canvas = document.getElementById('workspaceCanvas');
+        if (canvas) {
+            canvas.querySelectorAll(`[data-connection-key="${connectionKey}"]`).forEach(el => el.remove());
+            const [fromId, toId] = connectionKey.split('-');
+            canvas.querySelectorAll(`.connection-waypoint[data-from-block-id="${fromId}"][data-to-block-id="${toId}"]`).forEach(el => el.remove());
+        }
+
+        this.connectionLines.delete(connectionKey);
+    },
     
     /**
      * Draw trigger links from triggering blocks to workflow-complete event blocks

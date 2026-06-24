@@ -4,12 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Assembly Line OS – Remote</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
-          onload="this.rel='stylesheet'" onerror="this.remove()">
-    <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+    <script>
+        (function(){
+            var params = new URLSearchParams(window.location.search || '');
+            var raspiMode = params.get('raspi') === '1' || localStorage.getItem('assemblyLineRaspiMode') === '1';
+            if (raspiMode) {
+                window.ASSEMBLYLINE_RASPI_MODE = true;
+                localStorage.setItem('assemblyLineRaspiMode', '1');
+                localStorage.setItem('assemblyLineLowPower', '1');
+                document.documentElement.classList.add('low-power-mode', 'raspi-mode');
+            }
+        })();
+    </script>
+    <script src="{{ url_for('static', filename='vendor/tailwindcss.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/roslib.min.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <style>
@@ -17,7 +24,7 @@
         .remote-section { margin-bottom: 1rem; }
     </style>
 </head>
-<body class="remote-view min-h-screen bg-[var(--bg-page)] text-[var(--text-primary)] p-3 pb-6" style="font-family: 'JetBrains Mono', monospace;">
+<body class="remote-view min-h-screen bg-[var(--bg-page)] text-[var(--text-primary)] p-3 pb-6" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;">
     <div class="max-w-lg mx-auto">
         <!-- Header -->
         <header class="card px-3 py-2 mb-3 flex-shrink-0">

@@ -5,15 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Assembly Line OS</title>
     <script>
-        (function(){if(localStorage.getItem('assemblyLineTheme')==='light'){document.documentElement.setAttribute('data-theme','light');}})();
+        (function(){
+            var params = new URLSearchParams(window.location.search || '');
+            var raspiMode = params.get('raspi') === '1' || localStorage.getItem('assemblyLineRaspiMode') === '1';
+            if (raspiMode) {
+                window.ASSEMBLYLINE_RASPI_MODE = true;
+                localStorage.setItem('assemblyLineRaspiMode', '1');
+                localStorage.setItem('assemblyLineLowPower', '1');
+                document.documentElement.classList.add('low-power-mode', 'raspi-mode');
+            }
+            if(localStorage.getItem('assemblyLineTheme')==='light'){document.documentElement.setAttribute('data-theme','light');}
+        })();
     </script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- JetBrains Mono: non-blocking async load; falls back to system monospace when offline -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
-          onload="this.rel='stylesheet'" onerror="this.remove()">
-    <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+    <script src="{{ url_for('static', filename='vendor/tailwindcss.js') }}"></script>
     <!-- Self-hosted vendor scripts – no CDN dependency at runtime -->
     <script src="{{ url_for('static', filename='vendor/Sortable.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/roslib.min.js') }}"></script>
@@ -82,8 +86,8 @@
                     <button id="lowPowerBtn"
                             onclick="setLowPowerMode(); updateLowPowerBtn();"
                             class="btn-secondary px-1.5 py-0.5 text-xs font-medium"
-                            title="Toggle low-power mode (reduces animations and repaint cost on Raspberry Pi)">
-                        ⚡ ECO
+                            title="Raspberry Pi performance mode">
+                        PI MODE
                     </button>
                 </div>
                 

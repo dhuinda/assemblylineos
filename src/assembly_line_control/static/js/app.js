@@ -31,7 +31,7 @@ const App = {
                 const v = speedNum(st);
                 el2.textContent = !isNaN(v) ? `Live: ${Math.round(v)} sps` : 'Live: -- sps';
             }
-        }, 300);
+        }, 1000);
         
         // Set up the workflow system
         WorkflowManager.init();
@@ -604,13 +604,29 @@ function resumeSequence() {
 // helper below.
 (function initLowPowerMode() {
     const STORAGE_KEY = 'assemblyLineLowPower';
+    const RASPI_KEY = 'assemblyLineRaspiMode';
+    const params = new URLSearchParams(window.location.search || '');
+    const raspiMode = params.get('raspi') === '1' ||
+        window.ASSEMBLYLINE_RASPI_MODE === true ||
+        localStorage.getItem(RASPI_KEY) === '1';
     const isARM = /aarch64|armv[78]|arm64/i.test(navigator.userAgent || '');
+    const lowSpecDevice = (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) ||
+        (navigator.deviceMemory && navigator.deviceMemory <= 4);
     const saved = localStorage.getItem(STORAGE_KEY);
-    // Auto-enable on Pi unless the user has explicitly disabled it
-    const enabled = saved !== null ? saved === '1' : isARM;
+    if (raspiMode) {
+        window.ASSEMBLYLINE_RASPI_MODE = true;
+        localStorage.setItem(RASPI_KEY, '1');
+    }
+    // Pi kiosk mode always gets the lean visual path. Non-kiosk browsers can still override.
+    const enabled = raspiMode || (saved !== null ? saved === '1' : (isARM || lowSpecDevice));
     if (enabled) {
+        document.documentElement.classList.add('low-power-mode');
         document.body.classList.add('low-power-mode');
         localStorage.setItem(STORAGE_KEY, '1');
+    }
+    if (raspiMode) {
+        document.documentElement.classList.add('raspi-mode');
+        document.body.classList.add('raspi-mode');
     }
 })();
 
@@ -620,8 +636,19 @@ function resumeSequence() {
  */
 function setLowPowerMode(force) {
     const body = document.body;
+    const raspiMode = window.ASSEMBLYLINE_RASPI_MODE === true || localStorage.getItem('assemblyLineRaspiMode') === '1';
+    if (raspiMode) {
+        document.documentElement.classList.add('low-power-mode', 'raspi-mode');
+        body.classList.add('low-power-mode', 'raspi-mode');
+        localStorage.setItem('assemblyLineLowPower', '1');
+        if (typeof UIUtils !== 'undefined') {
+            UIUtils.log('[APP] Raspberry Pi performance mode is locked on', 'info');
+        }
+        return;
+    }
     const active = body.classList.contains('low-power-mode');
     const next = force !== undefined ? force : !active;
+    document.documentElement.classList.toggle('low-power-mode', next);
     body.classList.toggle('low-power-mode', next);
     localStorage.setItem('assemblyLineLowPower', next ? '1' : '0');
     if (typeof UIUtils !== 'undefined') {
@@ -633,9 +660,14 @@ function setLowPowerMode(force) {
 function updateLowPowerBtn() {
     const btn = document.getElementById('lowPowerBtn');
     if (!btn) return;
-    const on = document.body.classList.contains('low-power-mode');
+    const raspiMode = window.ASSEMBLYLINE_RASPI_MODE === true || localStorage.getItem('assemblyLineRaspiMode') === '1';
+    const on = raspiMode || document.body.classList.contains('low-power-mode');
     btn.classList.toggle('btn-warning', on);
     btn.classList.toggle('btn-secondary', !on);
+    btn.textContent = raspiMode ? 'PI MODE' : 'ECO';
+    btn.title = raspiMode
+        ? 'Raspberry Pi performance mode is locked on for this kiosk'
+        : 'Toggle low-power mode (reduces animations and repaint cost)';
 }
 
 // Start everything up once the page is loaded

@@ -131,7 +131,7 @@ class BrowserLauncher:
         if not ip:
             return None
 
-        url = f"http://{ip}:{self.port}"
+        url = f"http://{ip}:{self.port}/?raspi=1"
         print(f"Checking {url}...")
 
         if self.check_connection(ip, self.port):
@@ -157,10 +157,30 @@ class BrowserLauncher:
             List of command arguments, or None if no browser found
         """
         # Try Chromium first (most common on Raspberry Pi)
+        chromium_args = [
+            '--kiosk',
+            '--noerrdialogs',
+            '--disable-infobars',
+            '--disable-session-crashed-bubble',
+            '--disable-restore-session-state',
+            '--no-first-run',
+            '--disable-extensions',
+            '--disable-component-update',
+            '--disable-background-networking',
+            '--disable-sync',
+            '--disable-translate',
+            '--disable-features=Translate,MediaRouter,AutofillServerCommunication,OptimizationHints',
+            '--disable-pinch',
+            '--overscroll-history-navigation=0',
+            '--process-per-site',
+            '--renderer-process-limit=2',
+            '--enable-low-end-device-mode',
+            '--autoplay-policy=no-user-gesture-required',
+        ]
         browsers = [
-            ('chromium-browser', ['--kiosk', '--noerrdialogs', '--disable-infobars', '--disable-session-crashed-bubble', '--disable-restore-session-state']),
-            ('chromium', ['--kiosk', '--noerrdialogs', '--disable-infobars', '--disable-session-crashed-bubble', '--disable-restore-session-state']),
-            ('google-chrome', ['--kiosk', '--noerrdialogs', '--disable-infobars', '--disable-session-crashed-bubble', '--disable-restore-session-state']),
+            ('chromium-browser', chromium_args),
+            ('chromium', chromium_args),
+            ('google-chrome', chromium_args),
             ('firefox', ['-kiosk']),
         ]
         

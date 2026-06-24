@@ -107,13 +107,17 @@ const WorkflowManager = {
     /**
      * Schedule an update of the connection lines (but don't do it too often)
      */
-    scheduleConnectionsUpdate() {
+    scheduleConnectionsUpdate(blockId = null) {
         if (this.connectionsUpdateScheduled) return;
         
         this.connectionsUpdateScheduled = true;
         requestAnimationFrame(() => {
             this.connectionsUpdateScheduled = false;
-            BlockConnector.updateConnections();
+            if (blockId !== null && BlockConnector.updateConnectionsForBlock) {
+                BlockConnector.updateConnectionsForBlock(blockId);
+            } else {
+                BlockConnector.updateConnections();
+            }
         });
     },
     
@@ -478,6 +482,7 @@ const WorkflowManager = {
         let dragStart = { x: 0, y: 0 };
         let startPos = { x: 0, y: 0 };
         let hasPushedForThisDrag = false;
+        let dragCanvasRect = null;
         
         blockEl.addEventListener('mousedown', (e) => {
             if (e.target.classList.contains('block-connector') || 
@@ -493,6 +498,7 @@ const WorkflowManager = {
             hasPushedForThisDrag = false;
             const rect = blockEl.getBoundingClientRect();
             const canvasRect = this.canvas.getBoundingClientRect();
+            dragCanvasRect = canvasRect;
             
             dragStart = {
                 x: e.clientX - rect.left,
@@ -522,7 +528,7 @@ const WorkflowManager = {
             const now = performance.now();
             const shouldUpdate = now - this.lastDragUpdate >= this.dragUpdateThrottle;
             
-            const canvasRect = this.canvas.getBoundingClientRect();
+            const canvasRect = dragCanvasRect || this.canvas.getBoundingClientRect();
             let newX = e.clientX - canvasRect.left + this.canvas.scrollLeft - dragStart.x;
             let newY = e.clientY - canvasRect.top + this.canvas.scrollTop - dragStart.y;
             
@@ -548,7 +554,7 @@ const WorkflowManager = {
                 BlockConnector.checkSnapping(blockEl, blockData);
                 
                 // Schedule throttled updates instead of calling directly
-                this.scheduleConnectionsUpdate();
+                this.scheduleConnectionsUpdate(blockData.id);
                 this.scheduleCanvasSizeUpdate();
             }
         });
@@ -556,6 +562,7 @@ const WorkflowManager = {
         window.addEventListener('mouseup', () => {
             if (isDragging) {
                 isDragging = false;
+                dragCanvasRect = null;
                 blockEl.style.cursor = 'move';
                 
                 // Clear preview

@@ -57,7 +57,7 @@
 }
 
 * {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 html, body {
@@ -232,7 +232,7 @@ input, select {
     border: 1px solid var(--border-input);
     border-radius: 2px;
     transition: all 0.15s;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 input:focus, select:focus {
     border-color: #3b82f6;
@@ -240,7 +240,7 @@ input:focus, select:focus {
 }
 button {
     transition: all 0.15s;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 button:hover:not(:disabled) {
     transform: translateY(-1px);
@@ -337,7 +337,7 @@ button:disabled {
     font-weight: bold;
     opacity: 0.7;
     transition: all 0.15s;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     z-index: 25;
     line-height: 1;
 }
@@ -423,7 +423,7 @@ button:disabled {
     cursor: pointer;
     font-size: 20px;
     font-weight: 700;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     transition: all 0.2s ease;
     box-shadow: 0 4px 20px rgba(16, 185, 129, 0.5);
     letter-spacing: 2px;
@@ -721,7 +721,7 @@ button:disabled {
     font-size: 10px;
     opacity: 0;
     transition: all 0.15s;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     z-index: 11;
 }
 
@@ -788,7 +788,7 @@ button:disabled {
     border: 1px solid var(--border-input);
     border-radius: 4px;
     padding: 2px 6px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-size: 10px;
     font-weight: 600;
     color: var(--text-primary);
@@ -1692,7 +1692,7 @@ button:disabled {
     border-radius: 8px;
     color: var(--text-primary);
     transition: all 0.15s;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .project-form-input:focus,

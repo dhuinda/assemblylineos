@@ -14,6 +14,12 @@ const ControlCenter = {
     _rafScheduled: false,
     _incidentRenderTimer: null,
     _potDomReady: false,
+    _lastFullRefreshMs: 0,
+    _lastPotCanvasMs: 0,
+    _lastPotDebugMs: 0,
+    _serialVersion: 0,
+    _renderedSerialVersion: -1,
+    _htmlCache: new Map(),
 
     init() {
         this.patchUiUtilsLog();
@@ -160,18 +166,25 @@ const ControlCenter = {
             const panelVisible = panel && !panel.classList.contains('hidden');
             if (!this.isPaused() && panelVisible) this.refresh();
             this.scheduleRefresh();
-        }, 200); // ~5Hz – avoid 60fps DOM churn on Raspberry Pi
+        }, 500); // ~2Hz – avoid constant DOM churn on Raspberry Pi
     },
 
     refresh() {
-        this.renderSessionStrip();
+        const now = performance.now();
         this.renderSafetyStrip();
-        this.renderBootAndMatrix();
         this.renderLiveMotors();
         this.renderLiveRelays();
-        this.renderLivePot();
-        this.renderLiveSensors();
-        this.renderSerialLog();
+        this.renderLivePot(now);
+
+        // Slow/debug sections are mostly status text. Rebuild them at a lower
+        // cadence so SYSTEM can stay open on Raspberry Pi without pegging CPU.
+        if (now - this._lastFullRefreshMs >= 2000) {
+            this._lastFullRefreshMs = now;
+            this.renderSessionStrip();
+            this.renderBootAndMatrix();
+            this.renderLiveSensors();
+            this.renderSerialLog();
+        }
     },
 
     onExecutionState(state) {
@@ -205,7 +218,7 @@ const ControlCenter = {
             : null;
         const sim = typeof SimulationEngine !== 'undefined' && SimulationEngine.isActive;
         const reconnects = ROSBridge.wsReconnectCount || 0;
-        el.innerHTML = `
+        this._setHtml(el, 'sessionStrip', `
             <div><span class="text-gray-500">Bridge URL</span> <span class="text-gray-200 font-mono">${this._esc(Config.ROS_BRIDGE_URL || '')}</span></div>
             <div><span class="text-gray-500">WS uptime</span> <span class="text-gray-200">${wsSec}s</span>
                 <span class="text-gray-500 ml-2">reconnects</span> <span class="text-gray-200">${reconnects}</span></div>
@@ -214,7 +227,7 @@ const ControlCenter = {
             <div class="flex flex-wrap gap-1 pt-1">
                 <button type="button" class="btn-secondary px-1.5 py-0.5 text-[10px]" onclick="ProjectDialog.open()">Projects</button>
                 <button type="button" class="btn-secondary px-1.5 py-0.5 text-[10px]" onclick="SettingsManager.openDialog()">Settings</button>
-            </div>`;
+            </div>`);
     },
 
     renderSafetyStrip() {
@@ -222,10 +235,10 @@ const ControlCenter = {
         if (!el) return;
         const run = ROSBridge.executionSyncState && ROSBridge.executionSyncState.running;
         const other = run && ROSBridge.executionSyncState.clientId !== ROSBridge.getClientId();
-        el.innerHTML = `
+        this._setHtml(el, 'safetyStrip', `
             <span class="${run ? 'text-amber-400 font-bold' : 'text-gray-500'}">${run ? '● Run active' : '○ Idle'}</span>
             ${other ? '<span class="text-yellow-400">Another device is executor</span>' : ''}
-            <button type="button" class="btn-danger px-2 py-0.5 text-xs ml-auto" onclick="ROSBridge.emergencyStop()">E-STOP</button>`;
+            <button type="button" class="btn-danger px-2 py-0.5 text-xs ml-auto" onclick="ROSBridge.emergencyStop()">E-STOP</button>`);
     },
 
     renderBootAndMatrix() {
@@ -239,14 +252,14 @@ const ControlCenter = {
         const motorOk = !!(ROSBridge.motorStatus[1] || ROSBridge.motorStatus[2]);
         const sensN = ROSBridge.sensorStates ? ROSBridge.sensorStates.size : 0;
 
-        boot.innerHTML = `
+        this._setHtml(boot, 'bootChecklist', `
             <div class="text-gray-400 font-medium mb-1">Boot checklist</div>
             <ul class="space-y-0.5 text-gray-300">
                 <li>${rosOk ? '✓' : '…'} Rosbridge connected</li>
                 <li>${ardOk ? '✓' : (ard ? '✗' : '…')} Arduino serial ${ard ? (ardOk ? 'OK' : 'down') : '(no status yet)'}</li>
                 <li>${motorOk ? '✓' : '…'} Motor status seen</li>
                 <li>${sensN ? `✓ ${sensN} sensor(s)` : '…'} Sensors registered</li>
-            </ul>`;
+            </ul>`);
 
         const row = (name, ok, detail, topic) => {
             const st = ok ? 'ok' : 'bad';
@@ -262,7 +275,7 @@ const ControlCenter = {
             </tr>`;
         };
 
-        matrix.innerHTML = `
+        this._setHtml(matrix, 'subsystemMatrix', `
             <div class="text-gray-400 font-medium mb-1">Subsystem matrix</div>
             <table class="w-full text-[10px] border-collapse">
                 <thead><tr class="text-gray-500"><th class="text-left">Subsystem</th><th></th><th class="text-left">Detail</th><th>Rate</th><th></th></tr></thead>
@@ -274,7 +287,7 @@ const ControlCenter = {
                 ${row('Potentiometer', ROSBridge.lastPotRaw != null, ROSBridge.lastPotRaw != null ? String(ROSBridge.lastPotRaw.toFixed(1)) : 'no stream', '/potentiometer/raw')}
                 ${row('Speed setpoint', ROSBridge.motorSpeedSetpoint != null, ROSBridge.motorSpeedSetpoint != null ? String(ROSBridge.motorSpeedSetpoint.toFixed(2)) : 'no /motor_speed/setpoint', '/motor_speed/setpoint')}
                 </tbody>
-            </table>`;
+            </table>`);
     },
 
     renderLiveMotors() {
@@ -307,7 +320,7 @@ const ControlCenter = {
             </div>`;
         }
         html += '</div>';
-        el.innerHTML = html;
+        this._setHtml(el, 'liveMotors', html);
     },
 
     renderLiveRelays() {
@@ -326,10 +339,10 @@ const ControlCenter = {
             </div>`;
         }
         html += '</div>';
-        el.innerHTML = html;
+        this._setHtml(el, 'liveRelays', html);
     },
 
-    renderLivePot() {
+    renderLivePot(now = performance.now()) {
         const el = document.getElementById('ccLivePot');
         if (!el) return;
         if (!this._potDomReady) {
@@ -361,7 +374,9 @@ const ControlCenter = {
         if (setpEl) setpEl.textContent = '/motor_speed/setpoint: ' + (setp != null ? setp.toFixed(2) : '—');
 
         const canvas = document.getElementById('ccPotCanvas');
-        if (canvas && this.potHistory.length > 1) {
+        const lowPower = document.body.classList.contains('low-power-mode');
+        if (!lowPower && canvas && this.potHistory.length > 1 && now - this._lastPotCanvasMs >= 500) {
+            this._lastPotCanvasMs = now;
             const ctx = canvas.getContext('2d');
             const w = canvas.width;
             const h = canvas.height;
@@ -378,7 +393,10 @@ const ControlCenter = {
             ctx.stroke();
         }
 
-        this.renderPotDebug();
+        if (now - this._lastPotDebugMs >= 2000) {
+            this._lastPotDebugMs = now;
+            this.renderPotDebug();
+        }
     },
 
     renderPotDebug() {
@@ -470,7 +488,7 @@ const ControlCenter = {
         html += ` · /pot/debug topic: ${debugMeta ? debugMeta.hz.toFixed(1) + ' Hz' : 'no data'}, age ${debugTopicAge != null ? debugTopicAge.toFixed(1) + 's' : '—'}`;
         html += `</div>`;
 
-        el.innerHTML = html;
+        this._setHtml(el, 'potDebug', html);
     },
 
     renderLiveSensors() {
@@ -478,7 +496,7 @@ const ControlCenter = {
         if (!el) return;
         if (!ROSBridge.sensorStates || ROSBridge.sensorStates.size === 0) {
             this._prevSensorVal.clear();
-            el.innerHTML = '<div class="text-gray-400 font-medium mb-1">Live sensors</div><p class="text-gray-500 text-[10px]">No sensors registered (no sensor/status yet).</p>';
+            this._setHtml(el, 'liveSensors', '<div class="text-gray-400 font-medium mb-1">Live sensors</div><p class="text-gray-500 text-[10px]">No sensors registered (no sensor/status yet).</p>');
             return;
         }
         ROSBridge.sensorStates.forEach((s, sid) => {
@@ -504,7 +522,7 @@ const ControlCenter = {
             </tr>`;
         });
         html += '</tbody></table>';
-        el.innerHTML = html;
+        this._setHtml(el, 'liveSensors', html);
     },
 
     _attr(s) {
@@ -514,6 +532,8 @@ const ControlCenter = {
     renderSerialLog() {
         const el = document.getElementById('ccSerialLog');
         if (!el) return;
+        if (this._renderedSerialVersion === this._serialVersion) return;
+        this._renderedSerialVersion = this._serialVersion;
         el.innerHTML = '<div class="text-gray-400 font-medium mb-1">Arduino serial (other JSON)</div>' +
             this.serialLines.map((l) => `<div class="truncate">${this._esc(l)}</div>`).join('');
         el.scrollTop = el.scrollHeight;
@@ -523,6 +543,7 @@ const ControlCenter = {
         if (!line) return;
         this.serialLines.push(`[${new Date().toLocaleTimeString()}] ${line}`);
         if (this.serialLines.length > this.maxSerial) this.serialLines.shift();
+        this._serialVersion++;
     },
 
     copyTopic(topic) {
@@ -545,6 +566,13 @@ const ControlCenter = {
         return d.innerHTML;
     },
 
+    _setHtml(el, key, html) {
+        if (!el) return;
+        if (this._htmlCache.get(key) === html) return;
+        this._htmlCache.set(key, html);
+        el.innerHTML = html;
+    },
+
     incidentPush(message, type = 'info') {
         this.incidentLog.push({ t: Date.now(), message, type });
         if (this.incidentLog.length > this.maxIncidents) this.incidentLog.shift();
@@ -562,10 +590,11 @@ const ControlCenter = {
         const filter = document.querySelector('input[name="ccIncFilter"]:checked');
         const mode = filter ? filter.value : 'all';
         const lines = this.incidentLog.filter((e) => mode !== 'err' || e.type === 'error');
-        el.innerHTML = lines.slice(-80).map((e) => {
+        const html = lines.slice(-80).map((e) => {
             const cls = e.type === 'error' ? 'text-red-400' : e.type === 'success' ? 'text-green-400' : e.type === 'warning' ? 'text-yellow-400' : 'text-gray-400';
             return `<div class="${cls}">${new Date(e.t).toLocaleTimeString()} ${this._esc(e.message)}</div>`;
         }).join('');
+        this._setHtml(el, 'incidentLog', html);
         el.scrollTop = el.scrollHeight;
     },
 
