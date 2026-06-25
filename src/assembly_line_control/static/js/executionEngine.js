@@ -741,6 +741,11 @@ const ExecutionEngine = {
      * Mark a block as executing (visual feedback)
      */
     markBlockExecuting(blockId, isExecuting) {
+        // Pixi renderer path
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            PixiWorkspaceRenderer.setBlockExecuting(blockId, isExecuting);
+        }
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
         if (blockEl) {
             if (isExecuting) {
@@ -752,6 +757,9 @@ const ExecutionEngine = {
                 // Update active blocks panel if available
                 this.updateActiveBlocksPanel();
             }
+        } else {
+            // No DOM element (Pixi phantom may have been missed); still update panel
+            this.updateActiveBlocksPanel();
         }
     },
     

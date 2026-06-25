@@ -41,8 +41,22 @@ const WorkflowManager = {
         
         this.initializePalette();
         this.initializeCanvas();
+        if (typeof WebGLConnectionRenderer !== 'undefined') {
+            WebGLConnectionRenderer.attach(this.canvas);
+        }
         if (typeof UIUtils !== 'undefined') {
             UIUtils.log('[WORKFLOW] Workflow manager initialized', 'info');
+        }
+
+        // Start Pixi renderer async init; re-render all blocks once ready
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined') {
+            PixiWorkspaceRenderer.init(this.canvas).then(success => {
+                if (success && PixiWorkspaceRenderer.enabled) {
+                    // Pixi is ready – re-render all blocks that were loaded
+                    this.renderAll();
+                }
+            });
         }
     },
     
@@ -356,6 +370,11 @@ const WorkflowManager = {
                 contentWrapper.style.height = minContentHeight + 'px';
             }
         }
+
+        if (typeof WebGLConnectionRenderer !== 'undefined') {
+            WebGLConnectionRenderer.attach(this.canvas);
+            WebGLConnectionRenderer.resize();
+        }
     },
     
     /**
@@ -455,12 +474,31 @@ const WorkflowManager = {
      * Render a block on the canvas
      */
     renderBlock(blockData) {
-        const blockEl = BlockRenderer.createScratchBlock(blockData);
-        if (!blockEl) return;
-        
         // Snap position to grid when rendering
         blockData.x = this.snapToGrid(blockData.x);
         blockData.y = this.snapToGrid(blockData.y);
+
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            // Pixi mode: draw block via GPU renderer.
+            // Create a minimal phantom DOM element so legacy code (querySelector,
+            // classList-based execution highlighting, etc.) still resolves to something.
+            PixiWorkspaceRenderer.addBlock(blockData);
+            const phantom = document.createElement('div');
+            phantom.dataset.blockId = String(blockData.id);
+            phantom.dataset.type = blockData.type;
+            if (blockData.motor_id !== undefined) phantom.dataset.motorId = String(blockData.motor_id);
+            if (blockData.relay_id !== undefined) phantom.dataset.relayId = String(blockData.relay_id);
+            phantom.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+            this.canvas.appendChild(phantom);
+            this.blockElementCache.set(blockData.id, phantom);
+            if (BlockConnector.invalidateSpatialIndex) BlockConnector.invalidateSpatialIndex();
+            return;
+        }
+
+        // DOM renderer path
+        const blockEl = BlockRenderer.createScratchBlock(blockData);
+        if (!blockEl) return;
         
         blockEl.style.left = blockData.x + 'px';
         blockEl.style.top = blockData.y + 'px';
@@ -469,6 +507,9 @@ const WorkflowManager = {
         
         // Cache the element
         this.blockElementCache.set(blockData.id, blockEl);
+        if (typeof BlockConnector !== 'undefined' && BlockConnector.invalidateSpatialIndex) {
+            BlockConnector.invalidateSpatialIndex();
+        }
         
         // Make block draggable
         this.makeBlockDraggable(blockEl, blockData);
@@ -511,6 +552,7 @@ const WorkflowManager = {
             };
             
             blockEl.style.cursor = 'grabbing';
+            blockEl.classList.add('dragging');
             this.selectBlock(blockData.id);
             e.preventDefault();
         });
@@ -564,6 +606,7 @@ const WorkflowManager = {
                 isDragging = false;
                 dragCanvasRect = null;
                 blockEl.style.cursor = 'move';
+                blockEl.classList.remove('dragging');
                 
                 // Clear preview
                 BlockConnector.clearPreviewConnection();
@@ -575,6 +618,9 @@ const WorkflowManager = {
                 
                 // Snap blocks if close
                 BlockConnector.snapBlocks(blockEl, blockData);
+                if (BlockConnector.invalidateSpatialIndex) {
+                    BlockConnector.invalidateSpatialIndex();
+                }
                 
                 // Update connections and trigger links
                 BlockConnector.updateConnections();
@@ -608,6 +654,13 @@ const WorkflowManager = {
         if (blockEl) {
             blockEl.classList.add('selected');
         }
+        // Pixi selection highlight + overlay
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            PixiWorkspaceRenderer.setBlockSelected(blockId, true);
+            const bd = this.blocks.get(blockId);
+            if (bd && typeof PixiOverlay !== 'undefined') PixiOverlay.show(bd, PixiWorkspaceRenderer);
+        }
     },
     
     /**
@@ -615,11 +668,17 @@ const WorkflowManager = {
      */
     deselectBlock() {
         if (this.selectedBlockId) {
-            const blockEl = document.querySelector(`[data-block-id="${this.selectedBlockId}"]`);
+            const prevId = this.selectedBlockId;
+            const blockEl = document.querySelector(`[data-block-id="${prevId}"]`);
             if (blockEl) {
                 blockEl.classList.remove('selected');
             }
+            if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+                typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+                PixiWorkspaceRenderer.setBlockSelected(prevId, false);
+            }
             this.selectedBlockId = null;
+            if (typeof PixiOverlay !== 'undefined') PixiOverlay.hide();
         }
     },
     
@@ -696,6 +755,15 @@ const WorkflowManager = {
         // Clear caches for this block
         this.clearBlockCache(blockId);
         
+        // Remove from Pixi renderer (if active)
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            PixiWorkspaceRenderer.removeBlock(blockId);
+            if (typeof PixiOverlay !== 'undefined' && PixiOverlay.currentBlockId() === blockId) {
+                PixiOverlay.hide();
+            }
+        }
+
         // Remove from DOM
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
         if (blockEl) {
@@ -741,6 +809,10 @@ const WorkflowManager = {
         
         // Remove this block
         this.blocks.delete(blockId);
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            PixiWorkspaceRenderer.removeBlock(blockId);
+        }
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
         if (blockEl) {
             blockEl.remove();
@@ -765,6 +837,10 @@ const WorkflowManager = {
         
         // Remove this block from blocks map and DOM (but don't call removeBlock to avoid recursion)
         this.blocks.delete(blockId);
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            PixiWorkspaceRenderer.removeBlock(blockId);
+        }
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
         if (blockEl) {
             blockEl.remove();
@@ -784,6 +860,17 @@ const WorkflowManager = {
         
         // Clear canvas but preserve toolbar
         this.canvas.innerHTML = '';
+
+        if (typeof WebGLConnectionRenderer !== 'undefined') {
+            WebGLConnectionRenderer.attach(this.canvas);
+            WebGLConnectionRenderer.clear();
+        }
+
+        // In Pixi mode clear GPU state; Pixi canvas was appended during init so stays mounted
+        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
+            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            PixiWorkspaceRenderer.clear();
+        }
         
         // Re-append toolbar if it existed
         if (toolbar && toolbarParent === this.canvas) {
@@ -833,6 +920,11 @@ const WorkflowManager = {
             this.clearBlockCache();
             
             this.canvas.innerHTML = '';
+
+            if (typeof WebGLConnectionRenderer !== 'undefined') {
+                WebGLConnectionRenderer.attach(this.canvas);
+                WebGLConnectionRenderer.clear();
+            }
             
             // Re-append toolbar if it existed
             if (toolbar && toolbarParent === this.canvas) {

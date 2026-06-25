@@ -36,5 +36,16 @@ const Config = {
     
     // UI
     ANIMATION_DURATION: 150, // milliseconds
+
+    // Pixi workspace renderer
+    // Set to true (or add ?pixi=1 to URL) to enable GPU-accelerated block canvas.
+    // Falls back to DOM renderer when false or when WebGL is unavailable.
+    PIXI_WORKSPACE: (function() {
+        if (typeof window === 'undefined') return false;
+        const params = new URLSearchParams(window.location.search || '');
+        if (params.get('pixi') === '1') return true;
+        if (params.get('pixi') === '0') return false;
+        return localStorage.getItem('assemblyLinePixiWorkspace') === '1';
+    })(),
 };
 

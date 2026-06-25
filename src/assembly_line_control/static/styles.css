@@ -525,6 +525,14 @@ button:disabled {
     z-index: -1;
 }
 
+.workspace-webgl-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 4;
+    pointer-events: none;
+}
+
 .scratch-block {
     position: absolute;
     min-width: 140px;
@@ -543,6 +551,12 @@ button:disabled {
 .scratch-block:hover {
     border-color: var(--border-hover);
     z-index: 20;
+}
+
+.scratch-block.dragging {
+    transition: none;
+    box-shadow: none;
+    z-index: 40;
 }
 
 .scratch-block.executing {
@@ -1938,6 +1952,10 @@ body.remote-view {
 .low-power-mode .cc-card {
     box-shadow: none !important;
     filter: none !important;
+}
+
+.low-power-mode .workspace-canvas {
+    background-image: none !important;
 }
 
 /* Remove backdrop-filter from overlays (expensive on Pi) */
