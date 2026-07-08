@@ -5,7 +5,7 @@ const App = {
     /**
      * Get everything started up
      */
-    init() {
+    async init() {
         // Set up motor speed management
         MotorSpeedManager.init();
         
@@ -33,14 +33,11 @@ const App = {
             }
         }, 1000);
         
-        // Set up the workflow system
-        WorkflowManager.init();
-        
-        // Load any saved workflows
-        WorkflowManager.initialize();
+        // Set up the workflow system (Pixi GPU renderer by default)
+        await WorkflowManager.init();
         
         // Load workspace from storage (current workspace or default)
-        StorageManager.loadFromStorage();
+        await StorageManager.loadFromStorage();
         
         // Make sure the pause overlay is hidden when we start
         UIUtils.showPauseOverlay(false);

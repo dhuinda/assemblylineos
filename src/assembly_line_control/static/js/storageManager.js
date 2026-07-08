@@ -5,7 +5,7 @@
 const StorageManager = {
     currentProject: null, // Current project metadata
     autoSaveTimer: null, // Timer for debounced auto-save
-    autoSaveDelay: 1000, // Delay in ms for auto-save debouncing
+    autoSaveDelay: 1500, // Delay in ms for auto-save debouncing (longer reduces jank during editing)
     projectsCache: [], // Cache of project list
     isLoading: false, // Prevent concurrent operations
     

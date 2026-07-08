@@ -741,25 +741,28 @@ const ExecutionEngine = {
      * Mark a block as executing (visual feedback)
      */
     markBlockExecuting(blockId, isExecuting) {
-        // Pixi renderer path
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (typeof Config !== 'undefined' && Config.isPixiWorkspaceActive()) {
             PixiWorkspaceRenderer.setBlockExecuting(blockId, isExecuting);
+            this.updateActiveBlocksPanel();
+            return;
         }
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
         if (blockEl) {
             if (isExecuting) {
                 blockEl.classList.add('executing');
-                // Update active blocks panel if available
                 this.updateActiveBlocksPanel();
             } else {
                 blockEl.classList.remove('executing');
-                // Update active blocks panel if available
                 this.updateActiveBlocksPanel();
             }
         } else {
-            // No DOM element (Pixi phantom may have been missed); still update panel
             this.updateActiveBlocksPanel();
+        }
+    },
+
+    _syncPixiExecutingFromSet(blockIds) {
+        if (typeof Config !== 'undefined' && Config.isPixiWorkspaceActive()) {
+            PixiWorkspaceRenderer.setExecutingBlocks(new Set(blockIds));
         }
     },
     
@@ -1031,7 +1034,9 @@ const ExecutionEngine = {
         const blockIds = data.blockIds || [];
         const totalElapsed = data.totalElapsed || 0;
         const blockElapsedMap = data.blockElapsed || {};
-        
+
+        this._syncPixiExecutingFromSet(blockIds);
+
         if (blockIds.length === 0) {
             activePanel.innerHTML = '<p class="text-xs text-gray-500 text-center py-4">No blocks executing</p>';
             return;
@@ -1142,7 +1147,11 @@ const ExecutionEngine = {
         this.executingBlocks.clear();
         this.blockStartTimes.clear();
         this.executionStartTime = null;
-        
+
+        if (typeof Config !== 'undefined' && Config.isPixiWorkspaceActive()) {
+            PixiWorkspaceRenderer.clearAllExecuting();
+        }
+
         // Clear active blocks panel
         this.updateActiveBlocksPanel();
         

@@ -1,0 +1,10 @@
+# Skip markdown docs until an LLM API key is configured (graphify extract needs one for docs).
+*.md
+**/*.md
+*.html
+**/*.html
+*.txt
+**/*.txt
+build/
+install/
+log/

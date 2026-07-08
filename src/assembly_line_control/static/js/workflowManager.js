@@ -23,12 +23,68 @@ const WorkflowManager = {
     connectionsUpdateScheduled: false,
     lastDragUpdate: 0,
     dragUpdateThrottle: 50, // ~20fps for connector/snap work; block position updates still run every event
-    
+    draggingBlockId: null,
+
+    /**
+     * Mark block drag start — enables fast routing and skips expensive work during move.
+     */
+    beginBlockDrag(blockId) {
+        this.draggingBlockId = blockId;
+        if (typeof BlockConnector !== 'undefined' && BlockConnector.beginFastDragRouting) {
+            BlockConnector.beginFastDragRouting();
+        }
+    },
+
+    /**
+     * Mark block drag end — restores smart routing and invalidates path cache.
+     */
+    endBlockDrag() {
+        this.draggingBlockId = null;
+        if (typeof BlockConnector !== 'undefined' && BlockConnector.endFastDragRouting) {
+            BlockConnector.endFastDragRouting();
+        }
+    },
+
+    /**
+     * Whether the GPU Pixi workspace renderer is active.
+     */
+    isPixiMode() {
+        return typeof Config !== 'undefined' && Config.isPixiWorkspaceActive();
+    },
+
+    /**
+     * Remove block DOM nodes without destroying preserved workspace layers
+     * (Pixi host, WebGL layer, content wrapper, toolbar).
+     */
+    clearCanvasDOM() {
+        if (!this.canvas) return;
+
+        const preserve = new Set();
+        this.canvas.querySelectorAll('[data-workspace-preserve]').forEach(el => preserve.add(el));
+        const toolbar = document.getElementById('workspaceToolbar');
+        if (toolbar) preserve.add(toolbar);
+        const wrapper = this.canvas.querySelector('.canvas-content-wrapper');
+        if (wrapper) preserve.add(wrapper);
+        const pixiHost = this.canvas.querySelector('#workspace-pixi-host');
+        if (pixiHost) preserve.add(pixiHost);
+        if (typeof WebGLConnectionRenderer !== 'undefined' && WebGLConnectionRenderer.canvas) {
+            preserve.add(WebGLConnectionRenderer.canvas);
+        }
+
+        Array.from(this.canvas.children).forEach(child => {
+            if (!preserve.has(child)) child.remove();
+        });
+
+        if (this.isPixiMode()) {
+            PixiWorkspaceRenderer.ensureMounted();
+        }
+    },
+
     /**
      * Set everything up
      * Safe when canvas/blockPalette are missing (e.g. remote/headless page) - skips DOM init.
      */
-    init() {
+    async init() {
         this.canvas = document.getElementById('workspaceCanvas');
         this.blockPalette = document.getElementById('blockPalette');
         
@@ -41,22 +97,17 @@ const WorkflowManager = {
         
         this.initializePalette();
         this.initializeCanvas();
-        if (typeof WebGLConnectionRenderer !== 'undefined') {
-            WebGLConnectionRenderer.attach(this.canvas);
-        }
-        if (typeof UIUtils !== 'undefined') {
-            UIUtils.log('[WORKFLOW] Workflow manager initialized', 'info');
-        }
 
-        // Start Pixi renderer async init; re-render all blocks once ready
+        // Pixi must finish init before any renderAll() so the GPU canvas is not wiped.
         if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
             typeof PixiWorkspaceRenderer !== 'undefined') {
-            PixiWorkspaceRenderer.init(this.canvas).then(success => {
-                if (success && PixiWorkspaceRenderer.enabled) {
-                    // Pixi is ready – re-render all blocks that were loaded
-                    this.renderAll();
-                }
-            });
+            await PixiWorkspaceRenderer.init(this.canvas);
+        } else if (typeof WebGLConnectionRenderer !== 'undefined') {
+            WebGLConnectionRenderer.attach(this.canvas);
+        }
+
+        if (typeof UIUtils !== 'undefined') {
+            UIUtils.log('[WORKFLOW] Workflow manager initialized', 'info');
         }
     },
     
@@ -66,6 +117,7 @@ const WorkflowManager = {
      * @returns {number} - The snapped coordinate
      */
     snapToGrid(coord) {
+        if (this.isPixiMode()) return coord;
         return Math.round(coord / this.gridSize) * this.gridSize;
     },
     
@@ -354,12 +406,13 @@ const WorkflowManager = {
         if (!contentWrapper) {
             contentWrapper = document.createElement('div');
             contentWrapper.className = 'canvas-content-wrapper';
+            contentWrapper.setAttribute('data-workspace-preserve', 'true');
             contentWrapper.style.position = 'absolute';
             contentWrapper.style.width = minContentWidth + 'px';
             contentWrapper.style.height = minContentHeight + 'px';
             contentWrapper.style.top = '0';
             contentWrapper.style.left = '0';
-            contentWrapper.style.pointerEvents = 'none'; // Don't block interactions
+            contentWrapper.style.pointerEvents = 'none';
             this.canvas.appendChild(contentWrapper);
         } else {
             // Only update if size changed (avoid unnecessary reflows)
@@ -371,7 +424,9 @@ const WorkflowManager = {
             }
         }
 
-        if (typeof WebGLConnectionRenderer !== 'undefined') {
+        if (this.isPixiMode()) {
+            PixiWorkspaceRenderer.syncContentSize();
+        } else if (typeof WebGLConnectionRenderer !== 'undefined') {
             WebGLConnectionRenderer.attach(this.canvas);
             WebGLConnectionRenderer.resize();
         }
@@ -478,11 +533,7 @@ const WorkflowManager = {
         blockData.x = this.snapToGrid(blockData.x);
         blockData.y = this.snapToGrid(blockData.y);
 
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
-            // Pixi mode: draw block via GPU renderer.
-            // Create a minimal phantom DOM element so legacy code (querySelector,
-            // classList-based execution highlighting, etc.) still resolves to something.
+        if (this.isPixiMode()) {
             PixiWorkspaceRenderer.addBlock(blockData);
             const phantom = document.createElement('div');
             phantom.dataset.blockId = String(blockData.id);
@@ -492,7 +543,9 @@ const WorkflowManager = {
             phantom.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
             this.canvas.appendChild(phantom);
             this.blockElementCache.set(blockData.id, phantom);
-            if (BlockConnector.invalidateSpatialIndex) BlockConnector.invalidateSpatialIndex();
+            if (typeof BlockConnector !== 'undefined' && BlockConnector.invalidateSpatialIndex) {
+                BlockConnector.invalidateSpatialIndex();
+            }
             return;
         }
 
@@ -537,6 +590,7 @@ const WorkflowManager = {
             
             isDragging = true;
             hasPushedForThisDrag = false;
+            this.beginBlockDrag(blockData.id);
             const rect = blockEl.getBoundingClientRect();
             const canvasRect = this.canvas.getBoundingClientRect();
             dragCanvasRect = canvasRect;
@@ -585,13 +639,18 @@ const WorkflowManager = {
             // Update block data
             blockData.x = newX;
             blockData.y = newY;
-            
-            // Invalidate position cache for this block
+
+            if (typeof BlockConnector !== 'undefined') {
+                BlockConnector.blockPositionCache.delete(blockData.id);
+                if (BlockConnector.updateSpatialEntry) {
+                    BlockConnector.updateSpatialEntry(blockData.id);
+                }
+            }
             this.blockPositionCache.delete(blockData.id);
-            
+
             if (shouldUpdate) {
                 this.lastDragUpdate = now;
-                
+
                 // Check for snapping
                 BlockConnector.checkSnapping(blockEl, blockData);
                 
@@ -615,14 +674,15 @@ const WorkflowManager = {
                 // Clear only previously-flagged snap elements
                 BlockConnector._prevSnappingEls.forEach(el => el.classList.remove('snapping'));
                 BlockConnector._prevSnappingEls.clear();
-                
+
+                this.endBlockDrag();
                 // Snap blocks if close
                 BlockConnector.snapBlocks(blockEl, blockData);
                 if (BlockConnector.invalidateSpatialIndex) {
                     BlockConnector.invalidateSpatialIndex();
                 }
-                
-                // Update connections and trigger links
+
+                // Update connections and trigger links (smart routing)
                 BlockConnector.updateConnections();
                 
                 StorageManager.autoSave();
@@ -646,20 +706,19 @@ const WorkflowManager = {
      */
     selectBlock(blockId) {
         if (this.selectedBlockId === blockId) return;
-        
+
         this.deselectBlock();
-        
+
         this.selectedBlockId = blockId;
-        const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
-        if (blockEl) {
-            blockEl.classList.add('selected');
-        }
-        // Pixi selection highlight + overlay
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (this.isPixiMode()) {
             PixiWorkspaceRenderer.setBlockSelected(blockId, true);
             const bd = this.blocks.get(blockId);
-            if (bd && typeof PixiOverlay !== 'undefined') PixiOverlay.show(bd, PixiWorkspaceRenderer);
+            if (bd && typeof PixiOverlay !== 'undefined') {
+                PixiOverlay.show(bd, PixiWorkspaceRenderer);
+            }
+        } else {
+            const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
+            if (blockEl) blockEl.classList.add('selected');
         }
     },
     
@@ -669,16 +728,14 @@ const WorkflowManager = {
     deselectBlock() {
         if (this.selectedBlockId) {
             const prevId = this.selectedBlockId;
-            const blockEl = document.querySelector(`[data-block-id="${prevId}"]`);
-            if (blockEl) {
-                blockEl.classList.remove('selected');
-            }
-            if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-                typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+            if (this.isPixiMode()) {
                 PixiWorkspaceRenderer.setBlockSelected(prevId, false);
+                if (typeof PixiOverlay !== 'undefined') PixiOverlay.hide();
+            } else {
+                const blockEl = document.querySelector(`[data-block-id="${prevId}"]`);
+                if (blockEl) blockEl.classList.remove('selected');
             }
             this.selectedBlockId = null;
-            if (typeof PixiOverlay !== 'undefined') PixiOverlay.hide();
         }
     },
     
@@ -755,9 +812,8 @@ const WorkflowManager = {
         // Clear caches for this block
         this.clearBlockCache(blockId);
         
-        // Remove from Pixi renderer (if active)
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        // Remove from Pixi renderer
+        if (this.isPixiMode()) {
             PixiWorkspaceRenderer.removeBlock(blockId);
             if (typeof PixiOverlay !== 'undefined' && PixiOverlay.currentBlockId() === blockId) {
                 PixiOverlay.hide();
@@ -809,8 +865,7 @@ const WorkflowManager = {
         
         // Remove this block
         this.blocks.delete(blockId);
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (this.isPixiMode()) {
             PixiWorkspaceRenderer.removeBlock(blockId);
         }
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
@@ -837,8 +892,7 @@ const WorkflowManager = {
         
         // Remove this block from blocks map and DOM (but don't call removeBlock to avoid recursion)
         this.blocks.delete(blockId);
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (this.isPixiMode()) {
             PixiWorkspaceRenderer.removeBlock(blockId);
         }
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
@@ -854,22 +908,21 @@ const WorkflowManager = {
         // Save the toolbar before clearing
         const toolbar = document.getElementById('workspaceToolbar');
         const toolbarParent = toolbar ? toolbar.parentElement : null;
+
+        if (typeof BlockConnector !== 'undefined' && BlockConnector._bumpLayoutVersion) {
+            BlockConnector._bumpLayoutVersion();
+        }
         
         // Clear caches before re-rendering
         this.clearBlockCache();
         
-        // Clear canvas but preserve toolbar
-        this.canvas.innerHTML = '';
+        this.clearCanvasDOM();
 
-        if (typeof WebGLConnectionRenderer !== 'undefined') {
+        if (this.isPixiMode()) {
+            PixiWorkspaceRenderer.clear();
+        } else if (typeof WebGLConnectionRenderer !== 'undefined') {
             WebGLConnectionRenderer.attach(this.canvas);
             WebGLConnectionRenderer.clear();
-        }
-
-        // In Pixi mode clear GPU state; Pixi canvas was appended during init so stays mounted
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
-            PixiWorkspaceRenderer.clear();
         }
         
         // Re-append toolbar if it existed
@@ -919,18 +972,19 @@ const WorkflowManager = {
             // Clear caches
             this.clearBlockCache();
             
-            this.canvas.innerHTML = '';
+            this.clearCanvasDOM();
 
-            if (typeof WebGLConnectionRenderer !== 'undefined') {
+            if (this.isPixiMode()) {
+                PixiWorkspaceRenderer.clear();
+            } else if (typeof WebGLConnectionRenderer !== 'undefined') {
                 WebGLConnectionRenderer.attach(this.canvas);
                 WebGLConnectionRenderer.clear();
             }
-            
-            // Re-append toolbar if it existed
+
             if (toolbar && toolbarParent === this.canvas) {
                 this.canvas.appendChild(toolbar);
             }
-            
+
             BlockConnector.clear();
             StorageManager.autoSave();
             StorageManager.updateWorkspaceUI();
@@ -1291,14 +1345,8 @@ const WorkflowManager = {
      * Initialize from storage
      */
     initialize() {
-        this.blocks.clear();
-        this.workflows.clear();
-        this.blockIdCounter = 0;
-        this.workflowIdCounter = 0;
-        StorageManager.loadFromStorage();
-        this.renderAll();
-        // Update workspace UI after loading
-        StorageManager.updateWorkspaceUI();
+        // Legacy entry point – project load + render is handled by App.init()
+        // after WorkflowManager.init() completes (including Pixi setup).
     }
 };
 

@@ -15,6 +15,9 @@
                 document.documentElement.classList.add('low-power-mode', 'raspi-mode');
             }
             if(localStorage.getItem('assemblyLineTheme')==='light'){document.documentElement.setAttribute('data-theme','light');}
+            else if(!localStorage.getItem('assemblyLineTheme')&&window.matchMedia('(prefers-color-scheme: light)').matches){
+                document.documentElement.setAttribute('data-theme','light');
+            }
         })();
     </script>
     <script src="{{ url_for('static', filename='vendor/tailwindcss.js') }}"></script>
@@ -772,7 +775,7 @@
     <div id="settingsModal" class="settings-modal">
         <div class="settings-dialog">
             <div class="settings-header">
-                <h2 class="text-lg font-bold text-white">Arduino Pin Settings</h2>
+                <h2 class="text-lg font-bold text-white">Settings</h2>
                 <button onclick="SettingsManager.closeDialog()" class="settings-close-btn">&times;</button>
             </div>
             
@@ -880,6 +883,16 @@
                         </div>
                     </div>
                     <p class="settings-hint">Click a button, then press a key. Hotkeys are ignored while typing in inputs.</p>
+                </div>
+
+                <!-- Workspace Renderer Section -->
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Workspace</h3>
+                    <label class="settings-checkbox-row">
+                        <input type="checkbox" id="legacyRendererToggle" class="settings-input">
+                        <span>Use legacy DOM renderer</span>
+                    </label>
+                    <p class="settings-hint">The GPU renderer (Pixi) is faster and is used by default. Enable this to fall back to the original DOM block renderer. Reload required after saving.</p>
                 </div>
 
                 <!-- Arduino Connection Section -->

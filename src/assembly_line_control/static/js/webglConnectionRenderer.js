@@ -36,6 +36,7 @@ const WebGLConnectionRenderer = {
         if (!this.canvas) {
             this.canvas = document.createElement('canvas');
             this.canvas.className = 'workspace-webgl-layer';
+            this.canvas.setAttribute('data-workspace-preserve', 'true');
             this.canvas.setAttribute('aria-hidden', 'true');
             workspaceCanvas.insertBefore(this.canvas, workspaceCanvas.firstChild);
         }

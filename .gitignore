@@ -119,6 +119,9 @@ setup.sh
 setup.zsh
 setup.ps1
 
+# Graphify (graphify-out/ is committed; cost tracking stays local)
+graphify-out/cost.json
+
 # Build artifacts
 *.a
 *.lib

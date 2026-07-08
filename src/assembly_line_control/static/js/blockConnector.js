@@ -20,14 +20,47 @@ const BlockConnector = {
     spatialIndex: new Map(), // grid cell -> [{ id, block, element, pos }]
     spatialIndexDirty: true,
     spatialIndexCellSize: 220,
-    
+    _spatialEntries: new Map(), // blockId -> spatial index entry (for incremental updates)
+    _pathCache: new Map(), // connectionKey -> segments (smart routing)
+    _layoutVersion: 0,
+    _dragRoutingFast: false,
+
+    _isPixiActive() {
+        return typeof Config !== 'undefined' && Config.isPixiWorkspaceActive();
+    },
+
+    /**
+     * Build trigger link geometry from block positions (no DOM).
+     */
+    _triggerLinkFromPositions(fromBlockId, toBlockId) {
+        const fromPos = this.getBlockPositionById(fromBlockId);
+        const toPos = this.getBlockPositionById(toBlockId);
+        if (!fromPos || !toPos) return null;
+
+        const fromX = fromPos.right;
+        const fromY = fromPos.centerY;
+        const toX = toPos.left;
+        const toY = toPos.centerY;
+        const dx = toX - fromX;
+        const dy = toY - fromY;
+        const angleRad = Math.atan2(dy, dx);
+        const arrowDistance = 10;
+
+        return {
+            fromX,
+            fromY,
+            toX: toX - arrowDistance * Math.cos(angleRad),
+            toY: toY - arrowDistance * Math.sin(angleRad),
+            angle: angleRad,
+        };
+    },
+
     /**
      * Check if a block can snap to nearby blocks
      */
     checkSnapping(blockEl, blockData) {
         if (!blockData) return false;
-        const _pixiActive = typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled;
+        const _pixiActive = this._isPixiActive();
         if (!blockEl && !_pixiActive) return false;
         
         // Clear only the elements that had .snapping – avoids O(n) querySelectorAll every drag tick
@@ -150,8 +183,7 @@ const BlockConnector = {
         // Drag previews should stay cheap; final smart routing still runs on drop.
         const segments = this.calculateRightAnglePathFallback(fromX, fromY, toX, toY, WorkflowManager.gridSize);
 
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (this._isPixiActive()) {
             PixiWorkspaceRenderer.setPreview(segments);
             return;
         }
@@ -197,11 +229,9 @@ const BlockConnector = {
      * Clear preview connection line
      */
     clearPreviewConnection() {
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (this._isPixiActive()) {
             PixiWorkspaceRenderer.clearPreview();
-        }
-        if (typeof WebGLConnectionRenderer !== 'undefined') {
+        } else if (typeof WebGLConnectionRenderer !== 'undefined') {
             WebGLConnectionRenderer.clearPreview();
         }
 
@@ -259,6 +289,60 @@ const BlockConnector = {
     invalidateSpatialIndex() {
         this.spatialIndexDirty = true;
         this.spatialIndex.clear();
+        this._spatialEntries.clear();
+    },
+
+    _bumpLayoutVersion() {
+        this._layoutVersion++;
+        this._pathCache.clear();
+    },
+
+    beginFastDragRouting() {
+        this._dragRoutingFast = true;
+    },
+
+    endFastDragRouting() {
+        if (!this._dragRoutingFast) return;
+        this._dragRoutingFast = false;
+        this._bumpLayoutVersion();
+    },
+
+    removeSpatialEntry(blockId) {
+        const entry = this._spatialEntries.get(blockId);
+        if (!entry || !entry._cells) return;
+        entry._cells.forEach(cellKey => {
+            const arr = this.spatialIndex.get(cellKey);
+            if (!arr) return;
+            const filtered = arr.filter(e => e.id !== blockId);
+            if (filtered.length) this.spatialIndex.set(cellKey, filtered);
+            else this.spatialIndex.delete(cellKey);
+        });
+        this._spatialEntries.delete(blockId);
+    },
+
+    updateSpatialEntry(blockId) {
+        if (this.spatialIndexDirty) {
+            this.rebuildSpatialIndex();
+            return;
+        }
+        this.removeSpatialEntry(blockId);
+        const block = WorkflowManager.blocks.get(blockId);
+        if (!block) return;
+
+        let element = null;
+        let pos;
+        if (this._isPixiActive()) {
+            pos = PixiWorkspaceRenderer.getBlockPos(blockId);
+        } else {
+            element = this.getBlockElement(blockId);
+            if (!element) return;
+            pos = this.getBlockPosition(element, blockId);
+        }
+        if (!pos) return;
+
+        const entry = { id: blockId, block, element, pos };
+        this.addSpatialEntry(entry);
+        this._spatialEntries.set(blockId, entry);
     },
 
     addSpatialEntry(entry) {
@@ -267,22 +351,25 @@ const BlockConnector = {
         const maxX = Math.floor((entry.pos.right + margin) / this.spatialIndexCellSize);
         const minY = Math.floor((entry.pos.top - margin) / this.spatialIndexCellSize);
         const maxY = Math.floor((entry.pos.bottom + margin) / this.spatialIndexCellSize);
+        const cells = [];
 
         for (let cellX = minX; cellX <= maxX; cellX++) {
             for (let cellY = minY; cellY <= maxY; cellY++) {
                 const key = `${cellX},${cellY}`;
+                cells.push(key);
                 if (!this.spatialIndex.has(key)) {
                     this.spatialIndex.set(key, []);
                 }
                 this.spatialIndex.get(key).push(entry);
             }
         }
+        entry._cells = cells;
     },
 
     rebuildSpatialIndex() {
         this.spatialIndex.clear();
-        const pixiActive = typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled;
+        this._spatialEntries.clear();
+        const pixiActive = this._isPixiActive();
         WorkflowManager.blocks.forEach((block, id) => {
             let element = null;
             let pos;
@@ -294,9 +381,21 @@ const BlockConnector = {
                 pos = this.getBlockPosition(element, id);
             }
             if (!pos) return;
-            this.addSpatialEntry({ id, block, element, pos });
+            const entry = { id, block, element, pos };
+            this.addSpatialEntry(entry);
+            this._spatialEntries.set(id, entry);
         });
         this.spatialIndexDirty = false;
+    },
+
+    getSmartPathSegments(fromX, fromY, toX, toY, gridSize, fromBlockId, toBlockId) {
+        const cacheKey = `${this._layoutVersion}:${fromBlockId}-${toBlockId}`;
+        if (this._pathCache.has(cacheKey)) {
+            return this._pathCache.get(cacheKey);
+        }
+        const segments = this.calculateSmartPath(fromX, fromY, toX, toY, gridSize, fromBlockId, toBlockId);
+        this._pathCache.set(cacheKey, segments);
+        return segments;
     },
 
     getNearbyBlocks(blockPos, movingBlockId) {
@@ -341,8 +440,7 @@ const BlockConnector = {
         }
 
         // Pixi mode: bypass DOM geometry entirely when blockId is known
-        if (blockId !== null && typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (blockId !== null && this._isPixiActive()) {
             return this.getBlockPositionById(blockId);
         }
 
@@ -392,8 +490,7 @@ const BlockConnector = {
         if (this.blockPositionCache.has(blockId)) return this.blockPositionCache.get(blockId);
 
         // Pixi renderer has authoritative world-space coordinates
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+        if (this._isPixiActive()) {
             const pos = PixiWorkspaceRenderer.getBlockPos(blockId);
             if (pos) { this.blockPositionCache.set(blockId, pos); return pos; }
         }
@@ -417,8 +514,7 @@ const BlockConnector = {
      */
     snapBlocks(blockEl, blockData) {
         if (!blockData) return;
-        const _pixiActive = typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled;
+        const _pixiActive = this._isPixiActive();
         if (!blockEl && !_pixiActive) return;
         
         // Event blocks can't be snapped to other blocks (they are root blocks)
@@ -642,7 +738,8 @@ const BlockConnector = {
         // Update connector visuals
         this.updateConnectorVisuals(fromBlockId);
         this.updateConnectorVisuals(toBlockId);
-        
+
+        this._bumpLayoutVersion();
         // Update connection lines
         this.updateConnections();
         
@@ -704,6 +801,7 @@ const BlockConnector = {
             // Update visuals
             this.updateConnectorVisuals(fromBlockId);
             this.updateConnectorVisuals(toBlockId);
+            this._bumpLayoutVersion();
             this.updateConnections();
             
             StorageManager.autoSave();
@@ -732,6 +830,13 @@ const BlockConnector = {
      * Update connector visual states
      */
     updateConnectorVisuals(blockId) {
+        const _pixi = this._isPixiActive();
+
+        if (_pixi) {
+            PixiWorkspaceRenderer.updateConnectorVisualsForBlock(blockId);
+            return;
+        }
+
         const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
         if (!blockEl) return;
         
@@ -768,25 +873,23 @@ const BlockConnector = {
      * Update all connection lines
      */
     updateConnections() {
-        // Remove all existing connection lines and waypoints
-        // Use a more efficient method with batch removal
         const canvas = document.getElementById('workspaceCanvas');
         if (!canvas) return;
-        
-        // Batch DOM operations for better performance
-        const elementsToRemove = canvas.querySelectorAll('.block-connection-line, .connection-waypoint, .block-connection-container, .block-trigger-link, .block-trigger-link-arrow');
-        elementsToRemove.forEach(el => el.remove());
-        this.connectionLines.clear();
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
+
+        this._dragRoutingFast = false;
+
+        if (!this._isPixiActive()) {
+            const elementsToRemove = canvas.querySelectorAll('.block-connection-line, .connection-waypoint, .block-connection-container, .block-trigger-link, .block-trigger-link-arrow');
+            elementsToRemove.forEach(el => el.remove());
+            this.connectionLines.clear();
+            if (typeof WebGLConnectionRenderer !== 'undefined') {
+                WebGLConnectionRenderer.attach(canvas);
+                WebGLConnectionRenderer.clear();
+            }
+        } else {
             PixiWorkspaceRenderer.clearConnections();
         }
-        if (typeof WebGLConnectionRenderer !== 'undefined') {
-            WebGLConnectionRenderer.attach(canvas);
-            WebGLConnectionRenderer.clear();
-        }
-        
-        // Clear position cache before redrawing (blocks may have moved)
+
         this.blockPositionCache.clear();
         
         // Draw connections
@@ -817,13 +920,27 @@ const BlockConnector = {
 
         this.clearBlockCache(blockId);
         const keys = this.getConnectionKeysForBlock(blockId);
+
+        if (this._isPixiActive()) {
+            keys.forEach((key) => {
+                const [fromId, toId] = key.split('-').map(Number);
+                this.drawConnection(fromId, toId, canvas);
+            });
+            if (!this._dragRoutingFast) {
+                this.drawTriggerLinks(canvas);
+            }
+            return;
+        }
+
         keys.forEach((key) => {
             const [fromId, toId] = key.split('-').map(Number);
             this.removeConnectionDom(key);
             this.drawConnection(fromId, toId, canvas);
         });
 
-        this.drawTriggerLinks(canvas);
+        if (!this._dragRoutingFast) {
+            this.drawTriggerLinks(canvas);
+        }
     },
 
     getConnectionKeysForBlock(blockId) {
@@ -848,6 +965,12 @@ const BlockConnector = {
     },
 
     removeConnectionDom(connectionKey) {
+        if (this._isPixiActive()) {
+            PixiWorkspaceRenderer.removeConnection(connectionKey);
+            this.connectionLines.delete(connectionKey);
+            return;
+        }
+
         const existing = this.connectionLines.get(connectionKey);
         if (existing && existing.parentNode) existing.remove();
 
@@ -859,10 +982,6 @@ const BlockConnector = {
         }
 
         this.connectionLines.delete(connectionKey);
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
-            PixiWorkspaceRenderer.removeConnection(connectionKey);
-        }
         if (typeof WebGLConnectionRenderer !== 'undefined') {
             WebGLConnectionRenderer.removeConnection(connectionKey);
         }
@@ -872,44 +991,45 @@ const BlockConnector = {
      * Draw trigger links from triggering blocks to workflow-complete event blocks
      */
     drawTriggerLinks(canvas) {
-        // Remove existing trigger links and arrows
-        document.querySelectorAll('.block-trigger-link, .block-trigger-link-arrow').forEach(el => {
-            el.remove();
-        });
-        
+        const pixi = this._isPixiActive();
+
+        if (!pixi) {
+            document.querySelectorAll('.block-trigger-link, .block-trigger-link-arrow').forEach(el => {
+                el.remove();
+            });
+        }
+
         if (!canvas) {
             canvas = document.getElementById('workspaceCanvas');
             if (!canvas) return;
         }
 
-        const webglTriggerLinks = [];
-        
+        const triggerLinks = [];
+
         WorkflowManager.blocks.forEach((block, blockId) => {
             if (block.type === 'event' && block.eventType === 'workflow-complete' && block.triggeredBy) {
                 const triggeringBlockId = block.triggeredBy;
                 const triggeringBlock = WorkflowManager.blocks.get(triggeringBlockId);
-                
-                if (triggeringBlock) {
-                    // Use cached elements for better performance
+                if (!triggeringBlock) return;
+
+                if (pixi) {
+                    const link = this._triggerLinkFromPositions(triggeringBlockId, blockId);
+                    if (link) triggerLinks.push(link);
+                } else {
                     const triggeringEl = this.getBlockElement(triggeringBlockId);
                     const eventEl = this.getBlockElement(blockId);
-                    
                     if (triggeringEl && eventEl) {
                         const triggerLink = this.drawTriggerLink(triggeringEl, eventEl, canvas, triggeringBlockId, blockId);
-                        if (triggerLink) {
-                            webglTriggerLinks.push(triggerLink);
-                        }
+                        if (triggerLink) triggerLinks.push(triggerLink);
                     }
                 }
             }
         });
 
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
-            PixiWorkspaceRenderer.setTriggerLinks(webglTriggerLinks);
-        }
-        if (typeof WebGLConnectionRenderer !== 'undefined' && WebGLConnectionRenderer.enabled) {
-            WebGLConnectionRenderer.setTriggerLinks(webglTriggerLinks);
+        if (pixi) {
+            PixiWorkspaceRenderer.setTriggerLinks(triggerLinks);
+        } else if (typeof WebGLConnectionRenderer !== 'undefined' && WebGLConnectionRenderer.enabled) {
+            WebGLConnectionRenderer.setTriggerLinks(triggerLinks);
         }
     },
     
@@ -939,8 +1059,7 @@ const BlockConnector = {
         const length = Math.sqrt(dx * dx + dy * dy);
         const angle = Math.atan2(dy, dx) * 180 / Math.PI;
 
-        const _renderInPixi = typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled;
+        const _renderInPixi = this._isPixiActive();
         const _renderInWebGL = typeof WebGLConnectionRenderer !== 'undefined' && WebGLConnectionRenderer.enabled;
         if (_renderInPixi || _renderInWebGL) {
             const arrowDistance = 10;
@@ -2228,16 +2347,24 @@ const BlockConnector = {
      * Draw a connection line between two blocks using right-angle routing
      */
     drawConnection(fromBlockId, toBlockId, canvas) {
-        // Use cached elements for better performance
-        const fromEl = this.getBlockElement(fromBlockId);
-        const toEl = this.getBlockElement(toBlockId);
-        
-        if (!fromEl || !toEl || !canvas) return;
-        
-        // Use cached positions with blockId for caching
-        const fromPos = this.getBlockPosition(fromEl, fromBlockId);
-        const toPos = this.getBlockPosition(toEl, toBlockId);
-        
+        if (!canvas) return;
+
+        const _pixiActive = this._isPixiActive();
+
+        let fromPos;
+        let toPos;
+
+        if (_pixiActive) {
+            fromPos = this.getBlockPositionById(fromBlockId);
+            toPos = this.getBlockPositionById(toBlockId);
+        } else {
+            const fromEl = this.getBlockElement(fromBlockId);
+            const toEl = this.getBlockElement(toBlockId);
+            if (!fromEl || !toEl) return;
+            fromPos = this.getBlockPosition(fromEl, fromBlockId);
+            toPos = this.getBlockPosition(toEl, toBlockId);
+        }
+
         if (!fromPos || !toPos) return;
         
         // Calculate connection points (bottom of from, top of to)
@@ -2254,25 +2381,27 @@ const BlockConnector = {
         let segments;
         if (useCustomPath) {
             segments = this.calculateCustomPath(fromX, fromY, toX, toY, customPath.waypoints);
+        } else if (this._dragRoutingFast) {
+            segments = this.calculateRightAnglePathFallback(fromX, fromY, toX, toY, WorkflowManager.gridSize);
         } else {
-            segments = this.calculateSmartPath(fromX, fromY, toX, toY, WorkflowManager.gridSize, fromBlockId, toBlockId);
+            segments = this.getSmartPathSegments(fromX, fromY, toX, toY, WorkflowManager.gridSize, fromBlockId, toBlockId);
         }
 
         const connectionKey = `${fromBlockId}-${toBlockId}`;
 
-        // Pixi mode: hand off to GPU renderer and skip DOM creation
-        if (typeof Config !== 'undefined' && Config.PIXI_WORKSPACE &&
-            typeof PixiWorkspaceRenderer !== 'undefined' && PixiWorkspaceRenderer.enabled) {
-            PixiWorkspaceRenderer.setConnection(connectionKey, segments);
+        // Pixi mode: GPU lines + interactive hit areas
+        if (_pixiActive) {
+            const waypoints = !this.autoWireEnabled && customPath.enabled ? customPath.waypoints : [];
+            PixiWorkspaceRenderer.setConnection(connectionKey, segments, fromBlockId, toBlockId, waypoints);
             return;
         }
 
-        const useWebGL = typeof WebGLConnectionRenderer !== 'undefined' && WebGLConnectionRenderer.enabled;
+        const useWebGL = !this._isPixiActive() &&
+            typeof WebGLConnectionRenderer !== 'undefined' && WebGLConnectionRenderer.enabled;
         if (useWebGL) {
             WebGLConnectionRenderer.setConnection(connectionKey, segments);
+            return;
         }
-        
-        // Create container for connection segments (so we can handle hover/click on all segments)
         const connectionContainer = document.createElement('div');
         connectionContainer.className = 'block-connection-container';
         connectionContainer.style.position = 'absolute';
@@ -2351,6 +2480,10 @@ const BlockConnector = {
             segmentWrapper.addEventListener('mouseenter', () => {
                 if (useWebGL) {
                     WebGLConnectionRenderer.setConnectionHover(connectionKey, true);
+                    return;
+                }
+                if (_pixiActive) {
+                    PixiWorkspaceRenderer.setConnectionHover(connectionKey, true);
                     return;
                 }
                 segments.forEach((_, segIndex) => {
@@ -2641,59 +2774,70 @@ const BlockConnector = {
      * Handle connector click to create connections
      */
     handleConnectorClick(blockId, connectorType) {
+        const _pixi = this._isPixiActive();
+
         if (!this.connectingFrom) {
-            // Start a connection
             const block = WorkflowManager.blocks.get(blockId);
             if (!block) return;
-            
-            // Can only start from bottom connector (or top for event blocks)
+
             if (connectorType === 'bottom' || (connectorType === 'top' && block.type === 'event')) {
                 this.connectingFrom = { blockId, connectorType };
-                
-                // Highlight the connector
-                const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
-                if (blockEl) {
-                    const connector = blockEl.querySelector(`.block-connector.${connectorType}`);
-                    if (connector) {
-                        connector.classList.add('connecting');
+
+                if (_pixi) {
+                    PixiWorkspaceRenderer.setConnectorConnecting(blockId, connectorType, true);
+                } else {
+                    const blockEl = document.querySelector(`[data-block-id="${blockId}"]`);
+                    if (blockEl) {
+                        const connector = blockEl.querySelector(`.block-connector.${connectorType}`);
+                        if (connector) connector.classList.add('connecting');
                     }
                 }
-                
-                UIUtils.log(`[CONNECTOR] Click another connector to connect to block ${blockId}`);
+
+                UIUtils.log(`[CONNECTOR] Click an input (top) connector on another block to connect`);
+            } else if (connectorType === 'top') {
+                UIUtils.log('[CONNECTOR] Start from an output (bottom) connector, then click an input (top) connector', 'warning');
             }
         } else {
-            // Complete a connection
             const fromBlockId = this.connectingFrom.blockId;
             const fromConnectorType = this.connectingFrom.connectorType;
-            
-            // Clear connecting state
-            const fromBlockEl = document.querySelector(`[data-block-id="${fromBlockId}"]`);
-            if (fromBlockEl) {
-                const fromConnector = fromBlockEl.querySelector(`.block-connector.${fromConnectorType}`);
-                if (fromConnector) {
-                    fromConnector.classList.remove('connecting');
+
+            if (fromBlockId === blockId && connectorType === fromConnectorType) {
+                if (_pixi) {
+                    PixiWorkspaceRenderer.setConnectorConnecting(fromBlockId, fromConnectorType, false);
+                } else {
+                    const fromBlockEl = document.querySelector(`[data-block-id="${fromBlockId}"]`);
+                    if (fromBlockEl) {
+                        const fromConnector = fromBlockEl.querySelector(`.block-connector.${fromConnectorType}`);
+                        if (fromConnector) fromConnector.classList.remove('connecting');
+                    }
                 }
-            }
-            
-            // Validate connection
-            if (fromBlockId === blockId) {
-                // Can't connect to self
                 this.connectingFrom = null;
                 return;
             }
-            
-            // Connect bottom to top
+
+            let connected = false;
             if (fromConnectorType === 'bottom' && connectorType === 'top') {
                 this.connectBlocks(fromBlockId, blockId);
+                connected = true;
             } else if (fromConnectorType === 'top' && connectorType === 'bottom') {
-                // Connecting from top (event block) to bottom of another
-                // This doesn't make sense in our model, but allow it and reverse
                 this.connectBlocks(blockId, fromBlockId);
+                connected = true;
             } else {
-                UIUtils.log('[CONNECTOR] Invalid connection: must connect bottom to top', 'warning');
+                UIUtils.log('[CONNECTOR] Connect output (bottom) to input (top)', 'warning');
             }
-            
-            this.connectingFrom = null;
+
+            if (connected) {
+                if (_pixi) {
+                    PixiWorkspaceRenderer.setConnectorConnecting(fromBlockId, fromConnectorType, false);
+                } else {
+                    const fromBlockEl = document.querySelector(`[data-block-id="${fromBlockId}"]`);
+                    if (fromBlockEl) {
+                        const fromConnector = fromBlockEl.querySelector(`.block-connector.${fromConnectorType}`);
+                        if (fromConnector) fromConnector.classList.remove('connecting');
+                    }
+                }
+                this.connectingFrom = null;
+            }
         }
     },
     
@@ -2701,16 +2845,21 @@ const BlockConnector = {
      * Cancel current connection attempt
      */
     cancelConnection() {
-        if (this.connectingFrom) {
-            const fromBlockEl = document.querySelector(`[data-block-id="${this.connectingFrom.blockId}"]`);
+        if (!this.connectingFrom) return;
+
+        const _pixi = this._isPixiActive();
+        const { blockId, connectorType } = this.connectingFrom;
+
+        if (_pixi) {
+            PixiWorkspaceRenderer.setConnectorConnecting(blockId, connectorType, false);
+        } else {
+            const fromBlockEl = document.querySelector(`[data-block-id="${blockId}"]`);
             if (fromBlockEl) {
-                const connector = fromBlockEl.querySelector(`.block-connector.${this.connectingFrom.connectorType}`);
-                if (connector) {
-                    connector.classList.remove('connecting');
-                }
+                const connector = fromBlockEl.querySelector(`.block-connector.${connectorType}`);
+                if (connector) connector.classList.remove('connecting');
             }
-            this.connectingFrom = null;
         }
+        this.connectingFrom = null;
     },
     
     /**
@@ -2731,7 +2880,9 @@ const BlockConnector = {
             el.remove();
         });
         this.connectionLines.clear();
-        if (typeof WebGLConnectionRenderer !== 'undefined') {
+        if (this._isPixiActive()) {
+            PixiWorkspaceRenderer.clearConnections();
+        } else if (typeof WebGLConnectionRenderer !== 'undefined') {
             WebGLConnectionRenderer.clear();
         }
     },

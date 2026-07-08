@@ -190,33 +190,57 @@ const UIUtils = {
         }
     },
     
+    _pixiBlockId(blockEl) {
+        if (!blockEl || !blockEl.dataset || blockEl.dataset.blockId == null) return null;
+        const id = Number(blockEl.dataset.blockId);
+        return Number.isFinite(id) ? id : null;
+    },
+
+    _syncPixiBlockState(blockEl, state) {
+        if (typeof Config === 'undefined' || !Config.isPixiWorkspaceActive()) {
+            return;
+        }
+        const id = this._pixiBlockId(blockEl);
+        if (id == null) return;
+        if (state === 'error') {
+            PixiWorkspaceRenderer.setBlockError(id, true);
+        } else if (state === 'warning') {
+            PixiWorkspaceRenderer.setBlockWarning(id, true);
+        } else {
+            PixiWorkspaceRenderer.clearBlockStates(id);
+        }
+    },
+
     /**
      * Add visual error state to a block element
      * @param {HTMLElement} blockEl - The block element
      */
     markBlockError(blockEl) {
+        this._syncPixiBlockState(blockEl, 'error');
         if (blockEl) {
             blockEl.classList.add('error');
             blockEl.classList.remove('warning');
         }
     },
-    
+
     /**
      * Add visual warning state to a block element
      * @param {HTMLElement} blockEl - The block element
      */
     markBlockWarning(blockEl) {
+        this._syncPixiBlockState(blockEl, 'warning');
         if (blockEl) {
             blockEl.classList.add('warning');
             blockEl.classList.remove('error');
         }
     },
-    
+
     /**
      * Clear visual error/warning states from a block element
      * @param {HTMLElement} blockEl - The block element
      */
     clearBlockStates(blockEl) {
+        this._syncPixiBlockState(blockEl, 'clear');
         if (blockEl) {
             blockEl.classList.remove('error', 'warning');
         }

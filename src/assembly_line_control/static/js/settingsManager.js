@@ -114,6 +114,32 @@ const SettingsManager = {
         const controls = this.config.controls || this.defaultConfig.controls;
         this.applyControlToButton('eStop', controls.eStop || this.defaultConfig.controls.eStop);
         this.applyControlToButton('start', controls.start || this.defaultConfig.controls.start);
+
+        const legacyToggle = document.getElementById('legacyRendererToggle');
+        if (legacyToggle) {
+            legacyToggle.checked = localStorage.getItem('assemblyLineLegacyRenderer') === '1';
+        }
+    },
+
+    /**
+     * Persist workspace renderer preference (local only, not sent to server).
+     * @returns {boolean} True if the preference changed and a reload is needed.
+     */
+    saveRendererPreference() {
+        const legacyToggle = document.getElementById('legacyRendererToggle');
+        if (!legacyToggle) return false;
+
+        const wantLegacy = legacyToggle.checked;
+        const hadLegacy = localStorage.getItem('assemblyLineLegacyRenderer') === '1';
+
+        if (wantLegacy) {
+            localStorage.setItem('assemblyLineLegacyRenderer', '1');
+        } else {
+            localStorage.removeItem('assemblyLineLegacyRenderer');
+        }
+        localStorage.removeItem('assemblyLinePixiWorkspace');
+
+        return wantLegacy !== hadLegacy;
     },
 
     /**
@@ -406,14 +432,22 @@ const SettingsManager = {
             
             if (response.ok) {
                 this.config = config;
+                const rendererChanged = this.saveRendererPreference();
                 this.closeDialog();
                 
                 // Log success
                 if (typeof UIUtils !== 'undefined') {
-                    UIUtils.log('[SETTINGS] Pin configuration saved successfully', 'success');
+                    UIUtils.log('[SETTINGS] Settings saved successfully', 'success');
+                    if (rendererChanged) {
+                        UIUtils.log('[SETTINGS] Renderer changed — reloading…', 'info');
+                    }
                 }
                 
                 console.log('[Settings] Configuration saved:', config);
+
+                if (rendererChanged) {
+                    setTimeout(() => location.reload(), 300);
+                }
             } else {
                 const data = await response.json();
                 throw new Error(data.error || 'Failed to save settings');

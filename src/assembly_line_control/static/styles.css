@@ -25,6 +25,45 @@
     --toggle-border: #4a4a4a;
     --toggle-knob: #d4d4d4;
     --block-shadow: rgba(0, 0, 0, 0.4);
+
+    /* Pixi GPU workspace tokens */
+    --pixi-block-fill-alpha: 0.92;
+    --pixi-label-id: #888888;
+    --pixi-label-detail: #bbbbbb;
+    --pixi-conn-line: #3b82f6;
+    --pixi-conn-active: #10b981;
+    --pixi-conn-hover: #ef4444;
+    --pixi-conn-preview: #10b981;
+    --pixi-selected: #3b82f6;
+    --pixi-executing: #10b981;
+    --pixi-error: #ef4444;
+    --pixi-warning: #f59e0b;
+    --pixi-snapping: #10b981;
+    --pixi-connected: #10b981;
+    --pixi-connecting: #fbbf24;
+    --pixi-trigger-link: #8b5cf6;
+    --pixi-waypoint-fill: #8b5cf6;
+    --pixi-waypoint-stroke: #c4b5fd;
+    --pixi-default-bg: #1a1a1a;
+    --pixi-default-border: #555555;
+    --pixi-event-bg: #0a2218;
+    --pixi-event-border: #10b981;
+    --pixi-motor-bg: #0a1a2e;
+    --pixi-motor-border: #3b82f6;
+    --pixi-relay-bg: #2a1e00;
+    --pixi-relay-border: #f59e0b;
+    --pixi-pause-bg: #2a0808;
+    --pixi-pause-border: #ef4444;
+    --pixi-delay-bg: #160828;
+    --pixi-delay-border: #8b5cf6;
+    --pixi-loop-bg: #28081a;
+    --pixi-loop-border: #ec4899;
+    --pixi-sensor-bg: #001414;
+    --pixi-sensor-border: #06b6d4;
+    --pixi-error-block-bg: #1a0e00;
+    --pixi-error-block-border: #f97316;
+    --pixi-wait-key-bg: #16082a;
+    --pixi-wait-key-border: #8b5cf6;
 }
 
 /* Light mode */
@@ -54,6 +93,21 @@
     --toggle-border: #aaa;
     --toggle-knob: #ffffff;
     --block-shadow: rgba(0, 0, 0, 0.15);
+
+    --pixi-block-fill-alpha: 1;
+    --pixi-label-id: #666666;
+    --pixi-label-detail: #555555;
+    --pixi-default-bg: #ffffff;
+    --pixi-default-border: #888888;
+    --pixi-event-bg: #ecfdf5;
+    --pixi-motor-bg: #eff6ff;
+    --pixi-relay-bg: #fffbeb;
+    --pixi-pause-bg: #fef2f2;
+    --pixi-delay-bg: #f5f3ff;
+    --pixi-loop-bg: #fdf2f8;
+    --pixi-sensor-bg: #ecfeff;
+    --pixi-error-block-bg: #fff7ed;
+    --pixi-wait-key-bg: #f5f3ff;
 }
 
 * {
@@ -531,6 +585,300 @@ button:disabled {
     top: 0;
     z-index: 4;
     pointer-events: none;
+}
+
+.workspace-pixi-host {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 6;
+    pointer-events: none;
+}
+
+#pixi-block-overlay {
+    pointer-events: auto;
+}
+
+.pixi-block-overlay-panel {
+    display: none;
+    position: fixed;
+    z-index: 10000;
+    width: 300px;
+    max-width: calc(100vw - 24px);
+    max-height: 75vh;
+    overflow: hidden;
+    flex-direction: column;
+    background: var(--modal-bg);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.04),
+        0 12px 40px var(--block-shadow),
+        0 4px 16px rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+    transform-origin: top left;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.pixi-block-overlay-panel.pixi-overlay-visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.pixi-overlay-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 14px 14px 16px;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-elevated);
+    position: relative;
+}
+
+.pixi-overlay-header::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--pixi-accent, #3b82f6);
+}
+
+.pixi-overlay-header-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding-left: 6px;
+}
+
+.pixi-overlay-type {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.01em;
+    line-height: 1.2;
+}
+
+.pixi-overlay-id {
+    font-size: 11px;
+    font-weight: 500;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
+
+.pixi-overlay-close {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-input);
+    border-radius: 50%;
+    background: var(--resize-handle);
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.pixi-overlay-close:hover {
+    background: #dc2626;
+    border-color: #dc2626;
+    color: #fff;
+}
+
+.pixi-overlay-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 14px 16px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-hover) transparent;
+}
+
+.pixi-overlay-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.pixi-overlay-content::-webkit-scrollbar-thumb {
+    background: var(--border-hover);
+    border-radius: 3px;
+}
+
+.pixi-overlay-content .scratch-block.pixi-overlay-block {
+    position: static;
+    min-width: unset;
+    width: 100% !important;
+    height: auto !important;
+    min-height: unset !important;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    cursor: default;
+    box-shadow: none;
+    overflow: visible;
+}
+
+/* Hide redundant in-block title row; header already shows type + id */
+.pixi-overlay-block > div > div:first-child:has(.block-id-badge) {
+    display: none;
+}
+
+.pixi-overlay-block .flex.flex-col {
+    gap: 10px;
+}
+
+.pixi-overlay-block label,
+.pixi-overlay-content label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    letter-spacing: 0.02em;
+}
+
+.pixi-overlay-content input,
+.pixi-overlay-content select,
+.pixi-overlay-content textarea {
+    pointer-events: auto;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-input);
+    border-radius: 6px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.pixi-overlay-content input:hover,
+.pixi-overlay-content select:hover {
+    border-color: var(--border-hover);
+}
+
+.pixi-overlay-content input:focus,
+.pixi-overlay-content select:focus,
+.pixi-overlay-content textarea:focus {
+    outline: none;
+    border-color: var(--pixi-accent, #3b82f6);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pixi-accent, #3b82f6) 22%, transparent);
+}
+
+.pixi-overlay-content select {
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+}
+
+.pixi-overlay-content .text-xs.text-gray-400,
+.pixi-overlay-content .text-xs.text-gray-500,
+.pixi-overlay-content .motor-duration-display {
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 6px 8px;
+    background: var(--bg-lane);
+    border-radius: 6px;
+    border: 1px solid var(--border-default);
+    line-height: 1.4;
+}
+
+.pixi-overlay-content button:not(.pixi-overlay-close):not(.pixi-overlay-delete) {
+    pointer-events: auto;
+    padding: 7px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.pixi-overlay-footer {
+    padding: 10px 16px 14px;
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-elevated);
+}
+
+.pixi-overlay-delete {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 12px;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, #ef4444 35%, var(--border-input));
+    border-radius: 8px;
+    color: #f87171;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.pixi-overlay-delete-icon {
+    font-size: 13px;
+    opacity: 0.85;
+}
+
+.pixi-overlay-delete:hover {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: #ef4444;
+    color: #fca5a5;
+}
+
+/* Block-type accent colors (header stripe + focus ring) */
+.pixi-accent-event { --pixi-accent: #10b981; }
+.pixi-accent-motor { --pixi-accent: #3b82f6; }
+.pixi-accent-relay { --pixi-accent: #f59e0b; }
+.pixi-accent-pause { --pixi-accent: #ef4444; }
+.pixi-accent-delay { --pixi-accent: #8b5cf6; }
+.pixi-accent-repeat,
+.pixi-accent-forever,
+.pixi-accent-break { --pixi-accent: #ec4899; }
+.pixi-accent-wait-sensor,
+.pixi-accent-read-sensor { --pixi-accent: #06b6d4; }
+.pixi-accent-ros-trigger { --pixi-accent: #a855f7; }
+.pixi-accent-throw-error,
+.pixi-accent-catch,
+.pixi-accent-try { --pixi-accent: #f97316; }
+.pixi-accent-wait-key { --pixi-accent: #6366f1; }
+.pixi-accent-trigger { --pixi-accent: #10b981; }
+.pixi-accent-default { --pixi-accent: #64748b; }
+
+.pixi-block-overlay-panel:has(.pixi-accent-event) { border-top: 2px solid #10b981; }
+.pixi-block-overlay-panel:has(.pixi-accent-motor) { border-top: 2px solid #3b82f6; }
+.pixi-block-overlay-panel:has(.pixi-accent-relay) { border-top: 2px solid #f59e0b; }
+.pixi-block-overlay-panel:has(.pixi-accent-pause) { border-top: 2px solid #ef4444; }
+.pixi-block-overlay-panel:has(.pixi-accent-delay) { border-top: 2px solid #8b5cf6; }
+.pixi-block-overlay-panel:has(.pixi-accent-wait-sensor),
+.pixi-block-overlay-panel:has(.pixi-accent-read-sensor) { border-top: 2px solid #06b6d4; }
+
+.workspace-pixi-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 6;
+    pointer-events: auto;
 }
 
 .scratch-block {
@@ -1246,6 +1594,22 @@ button:disabled {
     font-size: 10px;
     color: var(--text-dim);
     margin-top: 8px;
+}
+
+.settings-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.settings-checkbox-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
 }
 
 /* Control capture button (key remap) */
