@@ -92,6 +92,15 @@ def generate_launch_description():
             'pot_raw_max': 1023.0,
         }],
     )
+
+    # Headless runner: physical Start runs last opened project without a browser
+    project_runner_node = Node(
+        package='assembly_line_control',
+        executable='project_runner',
+        name='project_runner',
+        output='screen',
+        parameters=[],
+    )
     
     return LaunchDescription([
         rosbridge_port_arg,
@@ -101,5 +110,6 @@ def generate_launch_description():
         arduino_controller_node,
         sensor_controller_node,
         potentiometer_speed_node,
+        project_runner_node,
     ])
 

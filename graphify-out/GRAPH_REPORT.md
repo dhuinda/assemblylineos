@@ -1,16 +1,16 @@
-# Graph Report - assemblylineos  (2026-07-06)
+# Graph Report - assemblylineos  (2026-07-13)
 
 ## Corpus Check
-- 38 files · ~90,429 words
+- 39 files · ~94,453 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 3069 nodes · 6536 edges · 158 communities (93 shown, 65 thin omitted)
+- 3112 nodes · 6627 edges · 162 communities (89 shown, 73 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 330 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `3e2b0be6`
+- Built from commit: `94845d2d`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -95,7 +95,6 @@
 - [[_COMMUNITY_Community 77|Community 77]]
 - [[_COMMUNITY_Community 78|Community 78]]
 - [[_COMMUNITY_Community 79|Community 79]]
-- [[_COMMUNITY_Community 80|Community 80]]
 - [[_COMMUNITY_Community 81|Community 81]]
 - [[_COMMUNITY_Community 82|Community 82]]
 - [[_COMMUNITY_Community 83|Community 83]]
@@ -112,7 +111,6 @@
 - [[_COMMUNITY_Community 94|Community 94]]
 - [[_COMMUNITY_Community 95|Community 95]]
 - [[_COMMUNITY_Community 96|Community 96]]
-- [[_COMMUNITY_Community 97|Community 97]]
 - [[_COMMUNITY_Community 98|Community 98]]
 - [[_COMMUNITY_Community 99|Community 99]]
 - [[_COMMUNITY_Community 100|Community 100]]
@@ -122,7 +120,6 @@
 - [[_COMMUNITY_Community 104|Community 104]]
 - [[_COMMUNITY_Community 105|Community 105]]
 - [[_COMMUNITY_Community 106|Community 106]]
-- [[_COMMUNITY_Community 107|Community 107]]
 - [[_COMMUNITY_Community 108|Community 108]]
 - [[_COMMUNITY_Community 109|Community 109]]
 - [[_COMMUNITY_Community 110|Community 110]]
@@ -171,6 +168,12 @@
 - [[_COMMUNITY_Community 153|Community 153]]
 - [[_COMMUNITY_Community 154|Community 154]]
 - [[_COMMUNITY_Community 155|Community 155]]
+- [[_COMMUNITY_Community 158|Community 158]]
+- [[_COMMUNITY_Community 159|Community 159]]
+- [[_COMMUNITY_Community 160|Community 160]]
+- [[_COMMUNITY_Community 161|Community 161]]
+- [[_COMMUNITY_Community 162|Community 162]]
+- [[_COMMUNITY_Community 163|Community 163]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `Ze` - 59 edges
@@ -182,7 +185,7 @@
 7. `z` - 39 edges
 8. `join()` - 39 edges
 9. `Se()` - 37 edges
-10. `nt` - 36 edges
+10. `ArduinoController` - 36 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `constructor()` --calls--> `BC()`  [INFERRED]
@@ -199,103 +202,87 @@
 ## Import Cycles
 - None detected.
 
-## Communities (158 total, 65 thin omitted)
+## Communities (162 total, 73 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.01
-Nodes (42): AM(), Bh(), _cancelIfNeeded(), _checkPolygonOffset(), cull(), _cullRecursive(), Cv, _e (+34 more)
+Nodes (33): AM(), Bh(), _checkPolygonOffset(), cull(), _cullRecursive(), Cv, _e, fo() (+25 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.02
-Nodes (93): aa(), ac(), Ak(), bk(), blueGray(), bo(), Bp(), bx() (+85 more)
-
-### Community 2 - "Community 2"
-Cohesion: 0.05
-Nodes (12): addToBatch(), ca, Do, getExtensions(), gf(), handleContextRestored(), is, Pf() (+4 more)
+Nodes (94): aa(), ac(), Ak(), arbitraryProperty(), bk(), blueGray(), bo(), Bp() (+86 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.07
-Nodes (42): after(), Ah(), append(), B(), BC(), c2(), cloneDiv(), Co() (+34 more)
+Cohesion: 0.08
+Nodes (36): Ah(), B(), c2(), cloneDiv(), cm(), colorStops(), content(), convert() (+28 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.05
-Nodes (30): ArduinoController, main(), Force a reconnection to the Arduino - closes current connection and reconnects, Immediately publish connected status (called right after successful connection), Publish Arduino connection status periodically so new clients get it.          D, Get the path to the pin configuration file., Load pin configuration from file., Send pin configuration to Arduino. (+22 more)
+Nodes (31): ArduinoController, main(), Handle emergency stop command, Handle reconnect request from web interface, Force a reconnection to the Arduino - closes current connection and reconnects, Immediately publish connected status (called right after successful connection), Publish Arduino connection status periodically so new clients get it.          D, Get the path to the pin configuration file. (+23 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.04
-Nodes (80): add(), already(), au(), c(), calcBefore(), check(), checkForWarning(), cleanBrackets() (+72 more)
+Cohesion: 0.05
+Nodes (70): _a(), add(), already(), applyParallelOffset(), au(), Bh(), br(), c() (+62 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.07
-Nodes (42): An(), ao(), atrule(), beforeAfter(), block(), body(), checkMissedSemicolon(), colon() (+34 more)
+Cohesion: 0.10
+Nodes (29): An(), atrule(), checkMissedSemicolon(), colon(), comment(), decl(), doubleColon(), emptyRule() (+21 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.06
-Nodes (37): bd(), _d(), ed(), eo(), Er(), gd(), H1(), io() (+29 more)
-
-### Community 8 - "Community 8"
-Cohesion: 0.11
-Nodes (4): Fe, hh, isInteractive(), s()
+Cohesion: 0.08
+Nodes (26): Er(), gd(), H1(), j1(), ji(), K1(), kd, L1() (+18 more)
 
 ### Community 10 - "Community 10"
 Cohesion: 0.06
-Nodes (47): addToError(), async(), bd(), catch(), content(), css(), $d(), dp() (+39 more)
-
-### Community 11 - "Community 11"
-Cohesion: 0.05
-Nodes (7): Bt(), hg(), mr, Ra, Rr(), wr, yT()
-
-### Community 12 - "Community 12"
-Cohesion: 0.06
-Nodes (16): _addPipes(), _addSystem(), _addSystems(), createContext(), _getWorker(), init(), initFromContext(), _initWorkers() (+8 more)
+Nodes (45): addToError(), async(), bd(), catch(), $d(), dp(), E(), each() (+37 more)
 
 ### Community 13 - "Community 13"
-Cohesion: 0.08
-Nodes (39): kh, as(), Bh(), ca(), cr(), cs(), DC(), delete() (+31 more)
+Cohesion: 0.07
+Nodes (42): j_, kh, as(), ca(), cs(), DC(), delete(), _deleteIfExpired() (+34 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.07
-Nodes (37): Ba(), constructor(), createTokenizer(), error(), fromOffset(), G2(), Hn(), Ig() (+29 more)
+Cohesion: 0.08
+Nodes (43): append(), Ba(), clear(), constructor(), createTokenizer(), G2(), group(), Ig() (+35 more)
 
 ### Community 15 - "Community 15"
 Cohesion: 0.12
 Nodes (26): a(), B(), D(), e(), f(), Ft(), g(), Ht() (+18 more)
 
 ### Community 16 - "Community 16"
-Cohesion: 0.10
-Nodes (35): B0(), basename(), bb(), c0(), _cloneSource(), dirname(), extname(), F0() (+27 more)
+Cohesion: 0.12
+Nodes (31): B0(), basename(), bb(), dirname(), extname(), F0(), getCacheableAssets(), getChildByLabel() (+23 more)
 
 ### Community 17 - "Community 17"
-Cohesion: 0.07
-Nodes (36): _a(), Ae(), applyParallelOffset(), ax(), Bf(), ea(), en(), every() (+28 more)
+Cohesion: 0.10
+Nodes (23): _cloneSource(), Bf(), cx(), ec(), en(), every(), Ff(), fx() (+15 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.07
-Nodes (30): Ae, align(), at(), breakWords(), clear(), clone(), _createProxy(), cut() (+22 more)
+Cohesion: 0.06
+Nodes (28): Ae, align(), breakWords(), build(), _cancelIfNeeded(), dg(), _dispatchEvent(), fontFamily() (+20 more)
 
 ### Community 19 - "Community 19"
-Cohesion: 0.06
-Nodes (25): B2(), cd(), cs(), G2(), gt, hd(), Hn(), _isSourceReady() (+17 more)
+Cohesion: 0.07
+Nodes (27): B2(), Bg(), cd(), cs(), G2(), Gg(), gt, hd() (+19 more)
 
 ### Community 20 - "Community 20"
-Cohesion: 0.11
-Nodes (24): dT(), fillStyle(), _generateKey(), jp(), jT(), _l(), ne(), Or() (+16 more)
+Cohesion: 0.05
+Nodes (55): addColorStop(), at(), Ax(), bf(), _clamp(), clear(), clone(), _createProxy() (+47 more)
 
 ### Community 21 - "Community 21"
-Cohesion: 0.08
-Nodes (20): alpha(), Be(), bi, Fh(), getGlobalTint(), Gi(), He(), Hf (+12 more)
+Cohesion: 0.06
+Nodes (25): alpha(), bd(), Be(), bi, _d(), ed(), Fh(), getGlobalTint() (+17 more)
 
 ### Community 22 - "Community 22"
 Cohesion: 0.12
 Nodes (15): BrowserLauncher, main(), Resolve the target host and check whether the web port is available., Get the browser command for fullscreen/kiosk mode.                  Tries differ, Return command lines for currently running browser processes., Check whether a running browser command line already references the target URL., Open the browser in fullscreen/kiosk mode.                  Args:             ur, Initialize the browser launcher.                  Args:             hostname: .l (+7 more)
 
 ### Community 23 - "Community 23"
-Cohesion: 0.08
-Nodes (29): _activate(), _addChild(), addEventListener(), _addEvents(), addTickerListener(), Bg(), Cn, _createTouchHook() (+21 more)
+Cohesion: 0.05
+Nodes (46): _activate(), _addChild(), addChildAt(), addEventListener(), _addEvents(), _addPipes(), _addSystem(), _addSystems() (+38 more)
 
 ### Community 24 - "Community 24"
-Cohesion: 0.09
-Nodes (11): break(), bv(), finish(), _finishBatch(), fl, jh(), packIndex(), packQuadIndex() (+3 more)
+Cohesion: 0.17
+Nodes (8): break(), bv(), finish(), _finishBatch(), jh(), packIndex(), packQuadIndex(), pl
 
 ### Community 26 - "Community 26"
 Cohesion: 0.08
@@ -309,65 +296,45 @@ Nodes (27): check_root(), create_service_file(), disable_service(), enable_servi
 Cohesion: 0.11
 Nodes (27): check_root(), create_service_file(), disable_service(), enable_service(), ensure_service_runner(), get_ros_distro(), get_user_info(), get_workspace_path() (+19 more)
 
-### Community 29 - "Community 29"
-Cohesion: 0.12
-Nodes (4): _canvas(), pixels(), Tu, upload()
-
 ### Community 31 - "Community 31"
 Cohesion: 0.14
 Nodes (16): ArduinoTester, custom_command(), interactive_mode(), main(), print_menu(), Background thread to read Arduino responses, Send a JSON command to Arduino, Wait for and return the next response from Arduino (+8 more)
 
 ### Community 32 - "Community 32"
-Cohesion: 0.12
-Nodes (11): addRenderable(), _checkBlendMode(), collectRenderables(), collectRenderablesSimple(), collectRenderablesWithEffects(), nS(), sortChildren(), sortRenderLayerChildren() (+3 more)
+Cohesion: 0.24
+Nodes (6): addRenderable(), collectRenderables(), collectRenderablesSimple(), collectRenderablesWithEffects(), sortChildren(), sortRenderLayerChildren()
 
 ### Community 33 - "Community 33"
-Cohesion: 0.09
-Nodes (19): _addRunners(), ag, begin(), buildStart(), constructor(), fd(), fg, from() (+11 more)
+Cohesion: 0.07
+Nodes (24): _addRunners(), ag, begin(), buildStart(), constructor(), fd(), fg, from() (+16 more)
 
 ### Community 34 - "Community 34"
 Cohesion: 0.11
 Nodes (3): Hc, onRender(), updateCacheTexture()
 
-### Community 35 - "Community 35"
-Cohesion: 0.10
-Nodes (5): cu, G0, hr, Sw(), uninstall()
-
-### Community 37 - "Community 37"
-Cohesion: 0.10
-Nodes (4): Br(), _complete(), Eh(), re
-
 ### Community 39 - "Community 39"
 Cohesion: 0.24
 Nodes (19): a(), c(), d(), e(), f(), h(), i(), L() (+11 more)
 
-### Community 40 - "Community 40"
-Cohesion: 0.10
-Nodes (3): a1(), kn, ye
-
 ### Community 41 - "Community 41"
-Cohesion: 0.13
-Nodes (7): al, de(), ea, Gr(), measureFont(), measureText(), _unsafeEvalCheck()
+Cohesion: 0.17
+Nodes (6): de(), ea, Gr(), measureFont(), measureText(), _unsafeEvalCheck()
 
 ### Community 42 - "Community 42"
-Cohesion: 0.13
-Nodes (18): addColorStop(), Ax(), bf(), _clamp(), _f(), multiply(), premultiply(), _refreshInt() (+10 more)
+Cohesion: 0.10
+Nodes (19): Bl(), cb(), db(), fb(), _generateKey(), Gl(), hb(), Il() (+11 more)
 
 ### Community 43 - "Community 43"
 Cohesion: 0.12
-Nodes (6): Cl, eb(), _getBackBufferTexture(), renderStart(), Ph(), q_()
+Nodes (4): Cl, eb(), Ph(), q_()
+
+### Community 44 - "Community 44"
+Cohesion: 0.08
+Nodes (5): ai, du, Fw(), Pv, uu
 
 ### Community 45 - "Community 45"
-Cohesion: 0.17
+Cohesion: 0.14
 Nodes (3): Gp, Ho(), wp()
-
-### Community 46 - "Community 46"
-Cohesion: 0.07
-Nodes (27): j_, arbitraryProperty(), cm(), create(), dy(), ei(), forVariant(), gg() (+19 more)
-
-### Community 47 - "Community 47"
-Cohesion: 0.10
-Nodes (4): tilePosition(), tileScale(), Yi, Zi
 
 ### Community 48 - "Community 48"
 Cohesion: 0.15
@@ -378,48 +345,44 @@ Cohesion: 0.12
 Nodes (5): App, ProjectDialog, quickSaveProject(), saveConfiguration(), saveCurrentWorkspace()
 
 ### Community 50 - "Community 50"
-Cohesion: 0.25
-Nodes (12): ci(), dr(), getBounds(), getGlobalTransform(), hi(), mn(), Si(), toGlobal() (+4 more)
-
-### Community 51 - "Community 51"
-Cohesion: 0.13
-Nodes (3): containsPoint(), ol, qA
+Cohesion: 0.23
+Nodes (11): ci(), dr(), getBounds(), getGlobalTransform(), mn(), Si(), toGlobal(), toLocal() (+3 more)
 
 ### Community 52 - "Community 52"
-Cohesion: 0.20
-Nodes (11): clear(), _emitEvictions(), _entriesAscending(), Ks(), _moveToRecent(), Mr(), Nr(), Pf() (+3 more)
+Cohesion: 0.14
+Nodes (3): addToBatch(), Do, Wi()
 
 ### Community 53 - "Community 53"
-Cohesion: 0.13
-Nodes (12): getChildrenByLabel(), lo(), No(), o(), oT(), pp(), _processAnimations(), PT() (+4 more)
+Cohesion: 0.06
+Nodes (33): _applyKerning(), Di(), dp(), _drawGlyph(), ensureCharacters(), eo(), getChildrenByLabel(), getFont() (+25 more)
 
 ### Community 54 - "Community 54"
-Cohesion: 0.14
-Nodes (9): forceState(), K(), _onError(), onSourceResize(), resetState(), resize(), resolution(), unload() (+1 more)
+Cohesion: 0.20
+Nodes (3): bn, K(), us()
 
 ### Community 56 - "Community 56"
-Cohesion: 0.16
-Nodes (6): bounds(), em(), getFastGlobalBounds(), _getGlobalBoundsRecursive(), qw(), xa
+Cohesion: 0.33
+Nodes (5): bounds(), em(), getFastGlobalBounds(), _getGlobalBoundsRecursive(), qw()
 
 ### Community 57 - "Community 57"
 Cohesion: 0.09
 Nodes (5): Dw(), gu, hu, pu, vu
 
 ### Community 58 - "Community 58"
-Cohesion: 0.14
-Nodes (4): eu, _presentBackBuffer(), renderEnd(), xl
+Cohesion: 0.12
+Nodes (19): Ae(), ax(), ea(), go(), Gs(), Ht(), Je(), kf() (+11 more)
 
 ### Community 59 - "Community 59"
-Cohesion: 0.13
-Nodes (12): a(), add(), _addContainer(), _addListener(), addOnce(), Af(), Ef(), fa() (+4 more)
+Cohesion: 0.10
+Nodes (13): a(), add(), _addContainer(), _addListener(), addOnce(), Af(), Ef(), fa() (+5 more)
 
 ### Community 60 - "Community 60"
-Cohesion: 0.10
-Nodes (4): ai, Fw(), Pv, uu
+Cohesion: 0.18
+Nodes (8): main(), Handle sensor value updates, Publish status for a specific sensor, Publish status for all sensors, Manages sensor subscriptions and publishes sensor status, Register a new sensor to monitor, Subscribe to a sensor topic, SensorController
 
 ### Community 61 - "Community 61"
-Cohesion: 0.14
-Nodes (12): _applyKerning(), _drawGlyph(), ensureCharacters(), getFont(), getLayout(), has(), install(), La() (+4 more)
+Cohesion: 0.05
+Nodes (50): after(), BC(), beforeAfter(), block(), body(), calcBefore(), cleanBrackets(), Co() (+42 more)
 
 ### Community 64 - "Community 64"
 Cohesion: 0.18
@@ -430,24 +393,32 @@ Cohesion: 0.17
 Nodes (10): main(), map_pot_to_radius(), map_radius_to_speed(), pot_calibration_from_roll_od(), PotentiometerSpeedNode, Map roll radius to motor speed (steps/sec) so that surface speed     remains app, Maps potentiometer raw value to motor speed and publishes to ROS., Baseline steps/sec from UI motor blocks only (/motor_speed/baseline). (+2 more)
 
 ### Community 66 - "Community 66"
-Cohesion: 0.20
-Nodes (15): delete_project(), get_project(), get_projects_dir(), list_projects(), Trigger Arduino reconnection to apply new pin settings., Get the path to the projects directory., Sanitize project name for filesystem use., List all saved projects with their metadata. (+7 more)
+Cohesion: 0.05
+Nodes (48): api_version(), delete_project(), get_default_settings(), get_last_project(), get_last_project_path(), get_project(), get_projects_dir(), get_rosbridge_url() (+40 more)
 
 ### Community 67 - "Community 67"
-Cohesion: 0.12
-Nodes (13): addParticle(), addParticleAt(), bottomHeight(), height(), leftWidth(), onViewUpdate(), removeParticle(), removeParticleAt() (+5 more)
+Cohesion: 0.10
+Nodes (14): addParticle(), addParticleAt(), bottomHeight(), height(), leftWidth(), onViewUpdate(), Os, removeParticle() (+6 more)
 
 ### Community 68 - "Community 68"
 Cohesion: 0.23
 Nodes (5): ba, jf(), packAttributes(), packQuadAttributes(), updateElement()
 
-### Community 72 - "Community 72"
-Cohesion: 0.18
-Nodes (12): applyVariantOffset(), compare(), dm(), hm(), Lh(), QS(), recalculateVariantOffsets(), remapArbitraryVariantOffsets() (+4 more)
+### Community 69 - "Community 69"
+Cohesion: 0.07
+Nodes (8): ap(), dl, i(), lp(), ml, ob(), _resolve(), ul
 
-### Community 73 - "Community 73"
-Cohesion: 0.18
-Nodes (8): main(), Handle sensor value updates, Publish status for a specific sensor, Publish status for all sensors, Manages sensor subscriptions and publishes sensor status, Register a new sensor to monitor, Subscribe to a sensor topic, SensorController
+### Community 70 - "Community 70"
+Cohesion: 0.08
+Nodes (7): eu, Gb(), Hl, Rb(), ru, Tl, We()
+
+### Community 71 - "Community 71"
+Cohesion: 0.13
+Nodes (3): ll, nl(), f2()
+
+### Community 72 - "Community 72"
+Cohesion: 0.13
+Nodes (16): applyVariantOffset(), compare(), dm(), hm(), Lh(), otherPrefixes(), parentPrefix(), prefixes() (+8 more)
 
 ### Community 74 - "Community 74"
 Cohesion: 0.25
@@ -455,87 +426,79 @@ Nodes (4): getGpuContext(), _initContext(), mo(), updateGpuContext()
 
 ### Community 75 - "Community 75"
 Cohesion: 0.17
-Nodes (6): ap(), buildEnd(), Di(), Ht, lp(), Wx()
+Nodes (4): buildEnd(), go(), Ht, triangulate()
 
 ### Community 76 - "Community 76"
-Cohesion: 0.15
-Nodes (3): Bo, hp, We()
+Cohesion: 0.16
+Nodes (3): Bo, bp, hp
 
 ### Community 77 - "Community 77"
-Cohesion: 0.21
-Nodes (3): closePath(), Ep(), op()
+Cohesion: 0.16
+Nodes (4): closePath(), cp, Ep(), op()
 
 ### Community 78 - "Community 78"
-Cohesion: 0.15
-Nodes (9): init_ros(), main(), MotorCommandPublisher, Publish a relay command (on/off), Publish a sequence of commands, Start up ROS in a background thread, Publishes commands to motors and relays (legacy - rosbridge handles this now), Get ROS Bridge host and port from parameters (+1 more)
+Cohesion: 0.18
+Nodes (7): getExtensions(), gf(), handleContextRestored(), is, Pf(), wf(), F_()
 
 ### Community 79 - "Community 79"
-Cohesion: 0.23
-Nodes (8): buildGradient(), buildLinearGradient(), buildRadialGradient(), np(), rotate(), sp(), translate(), wM()
-
-### Community 80 - "Community 80"
-Cohesion: 0.15
-Nodes (7): addChildAt(), g_, getChildIndex(), reparentChild(), reparentChildAt(), setChildIndex(), swapChildren()
+Cohesion: 0.20
+Nodes (9): buildGradient(), buildLinearGradient(), buildRadialGradient(), hi(), np(), rotate(), sp(), translate() (+1 more)
 
 ### Community 81 - "Community 81"
-Cohesion: 0.16
-Nodes (14): autoUpdate(), _configureAutoUpdate(), i(), _isSourcePlaying(), _mediaReady(), _onCanPlay(), _onCanPlayThrough(), _onPlayStart() (+6 more)
+Cohesion: 0.20
+Nodes (12): autoUpdate(), _configureAutoUpdate(), _isSourcePlaying(), _mediaReady(), _onCanPlay(), _onCanPlayThrough(), _onPlayStart(), _onPlayStop() (+4 more)
 
 ### Community 82 - "Community 82"
 Cohesion: 0.22
 Nodes (13): _bootstrapEvent(), handleContextLost(), mapPositionToPoint(), _normalizeToPointerData(), normalizeWheelEvent(), _onPointerDown(), _onPointerMove(), _onPointerOverOut() (+5 more)
 
 ### Community 83 - "Community 83"
-Cohesion: 0.15
-Nodes (10): _cleanGraphicsContextData(), ensureAttributeBuffer(), ensureIndexBuffer(), getContextRenderData(), Hl, _initContextRenderData(), onGraphicsContextDestroy(), pi (+2 more)
+Cohesion: 0.20
+Nodes (9): _cleanGraphicsContextData(), ensureAttributeBuffer(), ensureIndexBuffer(), getContextRenderData(), _initContextRenderData(), onGraphicsContextDestroy(), pi, _resizeAttributeBuffer() (+1 more)
 
 ### Community 84 - "Community 84"
-Cohesion: 0.20
-Nodes (3): getLocalBounds(), _setHeight(), _setWidth()
+Cohesion: 0.17
+Nodes (6): Bt(), Cr(), jr(), VR, Xr, yT()
 
 ### Community 86 - "Community 86"
-Cohesion: 0.21
-Nodes (7): addEffect(), cc, filters(), _markStructureAsChanged(), mask(), removeEffect(), setMask()
+Cohesion: 0.27
+Nodes (10): ao(), error(), fromOffset(), Hn(), origin(), positionBy(), positionInside(), rangeBy() (+2 more)
 
-### Community 89 - "Community 89"
-Cohesion: 0.21
-Nodes (8): attach(), _capHitArea(), detach(), fn(), postrender(), removeChild(), removeChildren(), removeFromParent()
-
-### Community 90 - "Community 90"
+### Community 92 - "Community 92"
 Cohesion: 0.18
-Nodes (3): Gb(), Rb(), Tl
+Nodes (4): _presentBackBuffer(), renderEnd(), wM(), xa
 
 ### Community 93 - "Community 93"
-Cohesion: 0.21
-Nodes (4): dp(), fp, Mt, Oo()
+Cohesion: 0.24
+Nodes (3): fp, Mt, Oo()
 
 ### Community 94 - "Community 94"
-Cohesion: 0.12
-Nodes (5): gS(), Jo(), Mp(), P, updateUvs()
-
-### Community 97 - "Community 97"
-Cohesion: 0.20
-Nodes (11): Bl(), cb(), db(), fb(), Gl(), hb(), Il(), mb() (+3 more)
-
-### Community 98 - "Community 98"
-Cohesion: 0.40
-Nodes (4): build(), update(), updatePositions(), updateVertices()
+Cohesion: 0.10
+Nodes (8): gS(), Jo(), Mp(), _onError(), _onStyleChange(), P, style(), updateUvs()
 
 ### Community 99 - "Community 99"
 Cohesion: 0.22
 Nodes (6): cacheAsBitmap(), cacheAsTexture(), depthOfChildModified(), fi(), render(), zIndex()
 
+### Community 100 - "Community 100"
+Cohesion: 0.20
+Nodes (3): getLocalBounds(), _setHeight(), _setWidth()
+
+### Community 102 - "Community 102"
+Cohesion: 0.08
+Nodes (4): kn, Ln, qA, Ti()
+
 ### Community 104 - "Community 104"
-Cohesion: 0.28
-Nodes (9): br(), h2(), kt(), ly(), pm(), ul(), uy(), yg() (+1 more)
+Cohesion: 0.14
+Nodes (3): hg(), Ra, wr
 
 ### Community 105 - "Community 105"
-Cohesion: 0.22
-Nodes (9): base64(), Cy(), dM(), download(), image(), log(), My(), _normalizeOptions() (+1 more)
+Cohesion: 0.11
+Nodes (16): base64(), _canvas(), Cy(), dM(), download(), _getWorker(), image(), _initWorkers() (+8 more)
 
-### Community 107 - "Community 107"
-Cohesion: 0.13
-Nodes (14): _dispatchEvent(), Ip(), Ko(), _onClick(), _onFocus(), _onFocusOut(), svg(), trim() (+6 more)
+### Community 106 - "Community 106"
+Cohesion: 0.21
+Nodes (7): addEffect(), cc, filters(), _markStructureAsChanged(), mask(), removeEffect(), setMask()
 
 ### Community 110 - "Community 110"
 Cohesion: 0.25
@@ -545,45 +508,65 @@ Nodes (3): aa(), fS(), mS()
 Cohesion: 0.22
 Nodes (3): contextChange(), Sl, vb()
 
+### Community 112 - "Community 112"
+Cohesion: 0.24
+Nodes (4): nS(), zl, sS(), Ua()
+
 ### Community 113 - "Community 113"
 Cohesion: 0.25
 Nodes (3): enabled(), iu, _tickerUpdate()
 
-### Community 115 - "Community 115"
-Cohesion: 0.25
-Nodes (8): get_default_settings(), get_settings(), get_settings_path(), Get the path to the pin configuration file., Get default pin configuration., Get the current pin configuration., Save the pin configuration., save_settings()
-
 ### Community 118 - "Community 118"
+Cohesion: 0.25
+Nodes (3): isInteractive(), n(), s()
+
+### Community 123 - "Community 123"
+Cohesion: 0.22
+Nodes (4): _checkBlendMode(), fl, forceState(), resetState()
+
+### Community 125 - "Community 125"
+Cohesion: 0.14
+Nodes (3): tilePosition(), tileScale(), Zi
+
+### Community 131 - "Community 131"
+Cohesion: 0.33
+Nodes (3): HS(), upload(), Yl
+
+### Community 133 - "Community 133"
+Cohesion: 0.25
+Nodes (3): c0(), G0, th()
+
+### Community 158 - "Community 158"
 Cohesion: 0.33
 Nodes (4): Node, main(), Publishes a smooth repeating speed ramp for testing motor speed blocks., TestMotorSpeedPublisher
 
-### Community 127 - "Community 127"
-Cohesion: 0.33
-Nodes (6): get_rosbridge_url(), index(), Determine the ROS Bridge WebSocket URL.          This function determines the co, Serve the main web interface, Serve the mobile remote view (project select, manual controls, start/stop/e-stop, remote()
+### Community 159 - "Community 159"
+Cohesion: 0.52
+Nodes (5): Path, _last_project_path(), load_last_project_id(), load_project(), _projects_dir()
 
-### Community 133 - "Community 133"
-Cohesion: 0.50
-Nodes (4): api_version(), _package_meta_version(), Version string from installed package.xml or source tree., Package version and optional git rev for Control Center footer.
+### Community 160 - "Community 160"
+Cohesion: 0.29
+Nodes (4): Br(), _complete(), _nextPage(), _setupContext()
 
 ## Knowledge Gaps
 - **21 isolated node(s):** `ActiveBlocksPanel`, `App`, `ProjectDialog`, `BlockConnector`, `BlockRenderer` (+16 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **65 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **73 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `constructor()` connect `Community 33` to `Community 0`, `Community 1`, `Community 3`, `Community 132`, `Community 5`, `Community 7`, `Community 9`, `Community 10`, `Community 11`, `Community 12`, `Community 14`, `Community 16`, `Community 17`, `Community 18`, `Community 19`, `Community 20`, `Community 21`, `Community 23`, `Community 24`, `Community 32`, `Community 41`, `Community 42`, `Community 53`, `Community 54`, `Community 56`, `Community 61`, `Community 68`, `Community 70`, `Community 97`, `Community 98`, `Community 99`, `Community 109`, `Community 112`, `Community 119`?**
-  _High betweenness centrality (0.049) - this node is a cross-community bridge._
-- **Why does `Ze` connect `Community 9` to `Community 0`, `Community 33`, `Community 67`, `Community 35`, `Community 106`, `Community 77`, `Community 112`, `Community 19`, `Community 53`?**
-  _High betweenness centrality (0.048) - this node is a cross-community bridge._
-- **Why does `insert()` connect `Community 5` to `Community 1`, `Community 3`, `Community 6`, `Community 7`, `Community 11`, `Community 13`, `Community 46`, `Community 14`, `Community 16`, `Community 20`, `Community 53`?**
-  _High betweenness centrality (0.044) - this node is a cross-community bridge._
+- **Why does `constructor()` connect `Community 33` to `Community 0`, `Community 1`, `Community 5`, `Community 7`, `Community 9`, `Community 10`, `Community 12`, `Community 14`, `Community 16`, `Community 18`, `Community 19`, `Community 20`, `Community 21`, `Community 23`, `Community 161`, `Community 41`, `Community 42`, `Community 53`, `Community 54`, `Community 56`, `Community 58`, `Community 61`, `Community 68`, `Community 70`, `Community 84`, `Community 89`, `Community 92`, `Community 99`, `Community 109`, `Community 112`, `Community 119`?**
+  _High betweenness centrality (0.058) - this node is a cross-community bridge._
+- **Why does `Ze` connect `Community 9` to `Community 0`, `Community 33`, `Community 98`, `Community 67`, `Community 77`, `Community 45`, `Community 19`, `Community 127`?**
+  _High betweenness centrality (0.037) - this node is a cross-community bridge._
+- **Why does `insert()` connect `Community 5` to `Community 1`, `Community 3`, `Community 6`, `Community 7`, `Community 13`, `Community 14`, `Community 16`, `Community 20`, `Community 53`, `Community 122`, `Community 61`?**
+  _High betweenness centrality (0.036) - this node is a cross-community bridge._
 - **Are the 32 inferred relationships involving `constructor()` (e.g. with `at()` and `Be()`) actually correct?**
   _`constructor()` has 32 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Test interface for Arduino firmware`, `Auto-detect Arduino port`, `Disconnect from Arduino` to the rest of the system?**
-  _141 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _146 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.010319780317122863 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.010576644450883802 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.017357474188238815 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.017220990391722098 - nodes in this community are weakly interconnected._

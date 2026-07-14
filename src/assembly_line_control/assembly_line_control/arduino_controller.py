@@ -110,6 +110,10 @@ class ArduinoController(Node):
         self.potentiometer_raw_pub = self.create_publisher(Float32, 'potentiometer/raw', 10)
         self.potentiometer_debug_pub = self.create_publisher(String, 'potentiometer/debug', 10)
         self.serial_log_pub = self.create_publisher(String, 'arduino/serial_log', 10)
+        # Physical start/stop buttons on Arduino D9/D8 → browser Play / E-STOP
+        self.hardware_button_pub = self.create_publisher(String, 'assembly_line/hardware_button', 10)
+        # Republish /estop for ROS listeners when the hardware stop button fires
+        self.estop_pub = self.create_publisher(String, 'estop', 10)
         self._serial_log_times = []  # monotonic timestamps for rate limiting (max 10/s)
 
         # Initialize serial connection (after publishers are created)
@@ -183,7 +187,9 @@ class ArduinoController(Node):
                 {"id": 3, "pin": 56},
                 {"id": 4, "pin": 57}
             ],
-            "custom": []
+            # Firmware defaults: stop D8, start D9 (overridable via run_buttons in settings)
+            "custom": [],
+            "run_buttons": {"start_pin": 9, "stop_pin": 8},
         }
         
         try:
@@ -214,7 +220,11 @@ class ArduinoController(Node):
                 'type': 'config',
                 'motors': self.pin_config.get('motors', []),
                 'relays': self.pin_config.get('relays', []),
-                'custom': self.pin_config.get('custom', [])
+                'custom': self.pin_config.get('custom', []),
+                'run_buttons': self.pin_config.get('run_buttons', {
+                    'start_pin': 9,
+                    'stop_pin': 8,
+                }),
             }
             
             # Send the configuration
@@ -612,6 +622,9 @@ class ArduinoController(Node):
                                     if motor_id in (1, 2):
                                         self._apply_arduino_motor_status(motor_id, data)
                                         handled = True
+                                elif msg_type == 'button':
+                                    self._handle_hardware_button(data)
+                                    handled = True
                         except (json.JSONDecodeError, TypeError, ValueError):
                             if not line.startswith('T,'):
                                 self._serial_json_errors += 1
@@ -962,6 +975,40 @@ class ArduinoController(Node):
             self.publish_relay_status(relay_id)
     
     # === E-STOP CONTROL ===
+
+    def _handle_hardware_button(self, data):
+        """Handle physical start/stop button events from Arduino firmware."""
+        if not isinstance(data, dict):
+            return
+        action = data.get('action')
+        if action not in ('start', 'stop'):
+            self.get_logger().warn(f'Ignoring unknown hardware button action: {action!r}')
+            return
+
+        msg = String()
+        msg.data = json.dumps({'type': 'button', 'action': action})
+        self.hardware_button_pub.publish(msg)
+        self.get_logger().info(f'Hardware button: {action}')
+
+        if action == 'stop':
+            # Arduino already ran local estop; sync ROS-side state and notify listeners.
+            for motor_id in range(1, 3):
+                state = self.motor_states[motor_id]
+                state['steps_remaining'] = 0
+                state['steps_total'] = 0
+                state['is_moving'] = False
+                state['start_time'] = 0
+                state['expected_duration'] = 0
+            for relay_id in range(1, 5):
+                self.relay_states[relay_id] = 'off'
+            for motor_id in range(1, 3):
+                self.publish_motor_status(motor_id)
+            for relay_id in range(1, 5):
+                self.publish_relay_status(relay_id)
+
+            estop_msg = String()
+            estop_msg.data = 'ESTOP'
+            self.estop_pub.publish(estop_msg)
     
     def estop_callback(self, msg):
         """Handle emergency stop command"""

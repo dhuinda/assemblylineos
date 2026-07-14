@@ -18,6 +18,10 @@
  * Relay 3: Pin A2
  * Relay 4: Pin A3
  *
+ * Run buttons (INPUT_PULLUP, switch to GND):
+ * Stop / E-STOP: Pin 8
+ * Start: Pin 9
+ *
  * Note: Adjust pin numbers based on your hardware configuration
  * Note: ENABLE pins not used - configure drivers to be always enabled
  *
@@ -63,6 +67,22 @@ struct CustomPin {
 };
 CustomPin customPins[MAX_CUSTOM_PINS];
 int numCustomPins = 0;
+
+// Physical run buttons: INPUT_PULLUP, other side to GND (press = LOW). Pins from config.
+#define DEFAULT_START_BTN_PIN 9
+#define DEFAULT_STOP_BTN_PIN 8
+#define BTN_DEBOUNCE_MS 150
+#define BTN_LOCKOUT_MS 500
+
+struct RunButtonState {
+  int pin;
+  unsigned long lowSinceMs;
+  unsigned long lastFireMs;
+  bool armed;       // true after release; only armed buttons can fire
+  bool confirmed;   // true after stable LOW already fired this press
+};
+RunButtonState stopBtn = {DEFAULT_STOP_BTN_PIN, 0, 0, true, false};
+RunButtonState startBtn = {DEFAULT_START_BTN_PIN, 0, 0, true, false};
 
 // Motor state structure
 struct MotorState {
@@ -129,6 +149,9 @@ void clearSerialTxQueue(void);
 void flushSerialInputBytes(void);
 void handleSerialDisconnectSafety(void);
 void updateSerialLinkState(void);
+void pollRunButtons(unsigned long nowMs);
+void pollOneRunButton(RunButtonState* btn, unsigned long nowMs, bool isStop);
+void applyRunButtonPins(int startPin, int stopPin);
 
 static void trimBufferInPlace(char* s) {
   if (!s || !*s) return;
@@ -369,6 +392,8 @@ void setup() {
 
   pinMode(POT_PIN, INPUT);
 
+  applyRunButtonPins(DEFAULT_START_BTN_PIN, DEFAULT_STOP_BTN_PIN);
+
   for (int i = 0; i < MAX_CUSTOM_PINS; i++) {
     customPins[i].name[0] = '\0';
     customPins[i].pin = -1;
@@ -396,10 +421,73 @@ void loop() {
   readSerialCommands();
 
   unsigned long now = millis();
+  pollRunButtons(now);
   emitCompactTelemetry(now);
 
   // Non-blocking drain of queued telemetry bytes.
   drainSerialTxQueue();
+}
+
+void pollOneRunButton(RunButtonState* btn, unsigned long nowMs, bool isStop) {
+  if (!btn) return;
+
+  int level = digitalRead(btn->pin);
+
+  // Released (pull-up HIGH): re-arm for next press after lockout window.
+  if (level != LOW) {
+    btn->lowSinceMs = 0;
+    btn->confirmed = false;
+    if (nowMs - btn->lastFireMs >= BTN_LOCKOUT_MS) {
+      btn->armed = true;
+    }
+    return;
+  }
+
+  // Pressed (LOW)
+  if (!btn->armed || btn->confirmed) return;
+  if (btn->lastFireMs != 0 && (nowMs - btn->lastFireMs < BTN_LOCKOUT_MS)) return;
+
+  if (btn->lowSinceMs == 0) {
+    btn->lowSinceMs = nowMs;
+    return;
+  }
+
+  if (nowMs - btn->lowSinceMs < BTN_DEBOUNCE_MS) return;
+
+  // Stable LOW for debounce window: fire once.
+  btn->confirmed = true;
+  btn->armed = false;
+  btn->lastFireMs = nowMs;
+
+  if (isStop) {
+    processEStopCommand();
+    serialTxEnqueueLine("{\"type\":\"button\",\"action\":\"stop\"}\n");
+  } else {
+    serialTxEnqueueLine("{\"type\":\"button\",\"action\":\"start\"}\n");
+  }
+}
+
+void pollRunButtons(unsigned long nowMs) {
+  pollOneRunButton(&stopBtn, nowMs, true);
+  pollOneRunButton(&startBtn, nowMs, false);
+}
+
+void applyRunButtonPins(int startPin, int stopPin) {
+  if (!pinValidGeneral(startPin) || !pinValidGeneral(stopPin) || startPin == stopPin) {
+    return;
+  }
+  startBtn.pin = startPin;
+  stopBtn.pin = stopPin;
+  pinMode(startPin, INPUT_PULLUP);
+  pinMode(stopPin, INPUT_PULLUP);
+  stopBtn.lowSinceMs = 0;
+  stopBtn.lastFireMs = 0;
+  stopBtn.armed = true;
+  stopBtn.confirmed = false;
+  startBtn.lowSinceMs = 0;
+  startBtn.lastFireMs = 0;
+  startBtn.armed = true;
+  startBtn.confirmed = false;
 }
 
 void handleSerialDisconnectSafety(void) {
@@ -709,6 +797,14 @@ void processConfigCommandBuf(char* command) {
       }
     }
   }
+
+  const char* runButtonsKey = strstr(command, "\"run_buttons\"");
+  if (runButtonsKey) {
+    int startPin = extractIntJson(runButtonsKey, "start_pin");
+    int stopPin = extractIntJson(runButtonsKey, "stop_pin");
+    applyRunButtonPins(startPin, stopPin);
+  }
+
   serialTxEnqueueLine("{\"type\":\"config_ack\"}\n");
 }
 

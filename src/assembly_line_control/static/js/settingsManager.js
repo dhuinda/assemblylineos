@@ -19,7 +19,8 @@ const SettingsManager = {
             { id: 4, pin: 57 }   // A3
         ],
         custom: [],
-        controls: { eStop: 'Space', start: 'Enter' }
+        controls: { eStop: 'Space', start: 'Enter' },
+        run_buttons: { start_pin: 9, stop_pin: 8 }
     },
     
     // Current configuration
@@ -115,6 +116,12 @@ const SettingsManager = {
         this.applyControlToButton('eStop', controls.eStop || this.defaultConfig.controls.eStop);
         this.applyControlToButton('start', controls.start || this.defaultConfig.controls.start);
 
+        const runButtons = this.config.run_buttons || this.defaultConfig.run_buttons;
+        const startPinInput = document.getElementById('runButtonStartPin');
+        const stopPinInput = document.getElementById('runButtonStopPin');
+        if (startPinInput) startPinInput.value = runButtons.start_pin ?? this.defaultConfig.run_buttons.start_pin;
+        if (stopPinInput) stopPinInput.value = runButtons.stop_pin ?? this.defaultConfig.run_buttons.stop_pin;
+
         const legacyToggle = document.getElementById('legacyRendererToggle');
         if (legacyToggle) {
             legacyToggle.checked = localStorage.getItem('assemblyLineLegacyRenderer') === '1';
@@ -207,7 +214,8 @@ const SettingsManager = {
             motors: [],
             relays: [],
             custom: [],
-            controls: { ...this.defaultConfig.controls }
+            controls: { ...this.defaultConfig.controls },
+            run_buttons: { ...this.defaultConfig.run_buttons }
         };
         
         // Motor pins
@@ -264,6 +272,19 @@ const SettingsManager = {
             if (code) config.controls.start = code;
         }
 
+        const startPinInput = document.getElementById('runButtonStartPin');
+        const stopPinInput = document.getElementById('runButtonStopPin');
+        config.run_buttons = {
+            start_pin: parseInt(startPinInput?.value, 10),
+            stop_pin: parseInt(stopPinInput?.value, 10)
+        };
+        if (Number.isNaN(config.run_buttons.start_pin)) {
+            config.run_buttons.start_pin = this.defaultConfig.run_buttons.start_pin;
+        }
+        if (Number.isNaN(config.run_buttons.stop_pin)) {
+            config.run_buttons.stop_pin = this.defaultConfig.run_buttons.stop_pin;
+        }
+
         return config;
     },
     
@@ -273,6 +294,21 @@ const SettingsManager = {
      */
     validateConfig(config) {
         const usedPins = new Map();
+        const runButtons = config.run_buttons || this.defaultConfig.run_buttons;
+        const startPin = runButtons.start_pin;
+        const stopPin = runButtons.stop_pin;
+
+        if (startPin === undefined || startPin === null || startPin < 0 || startPin > 99) {
+            return 'Start button pin must be between 0 and 99';
+        }
+        if (stopPin === undefined || stopPin === null || stopPin < 0 || stopPin > 99) {
+            return 'Stop button pin must be between 0 and 99';
+        }
+        if (startPin === stopPin) {
+            return 'Start and Stop button pins must be different';
+        }
+        usedPins.set(`pin_${stopPin}`, 'Stop button (E-STOP)');
+        usedPins.set(`pin_${startPin}`, 'Start button');
         
         // Check motor pins
         for (const motor of config.motors) {
@@ -402,6 +438,16 @@ const SettingsManager = {
             }
             if (!this.config.controls.start) {
                 this.config.controls.start = this.defaultConfig.controls.start;
+            }
+        }
+        if (!this.config.run_buttons || typeof this.config.run_buttons !== 'object') {
+            this.config.run_buttons = { ...this.defaultConfig.run_buttons };
+        } else {
+            if (this.config.run_buttons.start_pin === undefined || this.config.run_buttons.start_pin === null) {
+                this.config.run_buttons.start_pin = this.defaultConfig.run_buttons.start_pin;
+            }
+            if (this.config.run_buttons.stop_pin === undefined || this.config.run_buttons.stop_pin === null) {
+                this.config.run_buttons.stop_pin = this.defaultConfig.run_buttons.stop_pin;
             }
         }
     },

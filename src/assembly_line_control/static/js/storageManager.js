@@ -54,6 +54,14 @@ const StorageManager = {
         // Also save to localStorage for quick reload
         if (project) {
             localStorage.setItem(Config.CURRENT_WORKSPACE_KEY, JSON.stringify(project));
+            if (project.id) {
+                // Persist last opened project for headless hardware Start
+                fetch('/api/last-project', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: project.id })
+                }).catch((err) => console.warn('Failed to persist last project:', err));
+            }
         } else {
             localStorage.removeItem(Config.CURRENT_WORKSPACE_KEY);
         }

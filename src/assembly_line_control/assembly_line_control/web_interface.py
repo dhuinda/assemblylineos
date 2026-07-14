@@ -324,7 +324,8 @@ def get_default_settings():
             {"id": 4, "pin": 57}   # A3
         ],
         "custom": [],
-        "controls": {"eStop": "Space", "start": "Enter"}
+        "controls": {"eStop": "Space", "start": "Enter"},
+        "run_buttons": {"start_pin": 9, "stop_pin": 8}
     }
 
 
@@ -413,6 +414,48 @@ def get_projects_dir():
     config_dir = Path.home() / '.assembly_line_os' / 'projects'
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir
+
+
+def get_last_project_path():
+    """Path to the last-opened project pointer used by headless start."""
+    config_dir = Path.home() / '.assembly_line_os'
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / 'last_project.json'
+
+
+@app.route('/api/last-project', methods=['GET'])
+def get_last_project():
+    """Return the last opened project id (for hardware start / recovery)."""
+    path = get_last_project_path()
+    try:
+        if path.exists():
+            with open(path, 'r') as f:
+                data = json.load(f)
+            return jsonify(data)
+        return jsonify({'project_id': None})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/last-project', methods=['POST'])
+def save_last_project():
+    """Persist which project was last opened (saved copy is what hardware Start runs)."""
+    path = get_last_project_path()
+    try:
+        body = request.get_json() or {}
+        project_id = body.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+        payload = {
+            'project_id': sanitize_project_name(str(project_id)),
+            'updated_at': __import__('datetime').datetime.now().isoformat(),
+        }
+        with open(path, 'w') as f:
+            json.dump(payload, f, indent=2)
+        return jsonify({'success': True, **payload})
+    except Exception as e:
+        print(f"Error saving last project: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 def sanitize_project_name(name):

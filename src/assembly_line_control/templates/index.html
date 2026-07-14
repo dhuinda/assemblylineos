@@ -885,6 +885,22 @@
                     <p class="settings-hint">Click a button, then press a key. Hotkeys are ignored while typing in inputs.</p>
                 </div>
 
+                <!-- Physical Run Buttons -->
+                <div class="settings-section">
+                    <h3 class="settings-section-title">Physical Start / Stop Buttons</h3>
+                    <div class="settings-grid">
+                        <div class="settings-field">
+                            <span class="settings-field-label">Start pin</span>
+                            <input type="number" id="runButtonStartPin" class="settings-input" min="0" max="99" value="9">
+                        </div>
+                        <div class="settings-field">
+                            <span class="settings-field-label">Stop pin (E-STOP)</span>
+                            <input type="number" id="runButtonStopPin" class="settings-input" min="0" max="99" value="8">
+                        </div>
+                    </div>
+                    <p class="settings-hint">Arduino digital pins with internal pull-up; other side of each switch to GND. Stop runs E-STOP. Start runs the last opened project (saved on disk) without needing the browser open. Reconnect Arduino after changing pins.</p>
+                </div>
+
                 <!-- Workspace Renderer Section -->
                 <div class="settings-section">
                     <h3 class="settings-section-title">Workspace</h3>

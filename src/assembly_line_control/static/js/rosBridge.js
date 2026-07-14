@@ -19,6 +19,7 @@ const ROSBridge = {
     executionStateSub: null,
     executionStopRequestPub: null,
     executionStopRequestSub: null,
+    hardwareButtonSub: null,
     executionStateInterval: null,
     activeBlocksPub: null,
     activeBlocksSub: null,
@@ -378,6 +379,7 @@ const ROSBridge = {
         this.sensorStatusSub = null;
         dropSub(this.executionStateSub);
         dropSub(this.executionStopRequestSub);
+        dropSub(this.hardwareButtonSub);
         dropSub(this.activeBlocksSub);
 
         // Listen for motor status updates
@@ -594,6 +596,40 @@ const ROSBridge = {
                 if (typeof UIUtils !== 'undefined') {
                     UIUtils.log('[SYNC] Playback stopped by another device', 'warning');
                 }
+            }
+        });
+
+        // Physical Arduino buttons: Start runs last project via project_runner (no browser needed).
+        // Stop still syncs E-STOP UI state if a browser tab is open.
+        this.hardwareButtonSub = new ROSLIB.Topic({
+            ros: this.ros,
+            name: '/assembly_line/hardware_button',
+            messageType: 'std_msgs/String'
+        });
+        this.hardwareButtonSub.subscribe((msg) => {
+            try {
+                const data = this.safeJsonParse(msg.data, '/assembly_line/hardware_button');
+                if (!data || data.type !== 'button') return;
+                if (data.action === 'start') {
+                    if (typeof UIUtils !== 'undefined') {
+                        UIUtils.log('[HARDWARE] Start button — headless runner will start last opened project', 'info');
+                    }
+                    // Intentionally do not call startExecution(); project_runner owns headless start.
+                } else if (data.action === 'stop') {
+                    if (typeof emergencyStop === 'function') {
+                        if (typeof UIUtils !== 'undefined') {
+                            UIUtils.log('[HARDWARE] Stop button pressed (E-STOP)', 'error');
+                        }
+                        emergencyStop();
+                    } else if (typeof this.emergencyStop === 'function') {
+                        this.emergencyStop();
+                        if (typeof ExecutionEngine !== 'undefined') {
+                            ExecutionEngine.stop();
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('[ROS] hardware_button parse error:', e);
             }
         });
         

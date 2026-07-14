@@ -37,6 +37,11 @@ install(PROGRAMS
   RENAME potentiometer_speed_node
 )
 install(PROGRAMS
+  ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/project_runner.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME project_runner
+)
+install(PROGRAMS
   ${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}/test_motor_speed_publisher.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME test_motor_speed_publisher

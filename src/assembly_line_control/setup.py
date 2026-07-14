@@ -29,6 +29,7 @@ setup(
             'arduino_controller = assembly_line_control.arduino_controller:main',
             'sensor_controller = assembly_line_control.sensor_controller:main',
             'potentiometer_speed_node = assembly_line_control.potentiometer_speed_node:main',
+            'project_runner = assembly_line_control.project_runner:main',
             'test_motor_speed_publisher = assembly_line_control.test_motor_speed_publisher:main',
         ],
     },
